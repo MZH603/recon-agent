@@ -59,10 +59,5 @@ recon-agent-mcp --authorized-for example.com --allow-l1
 .venv/Scripts/python -m pytest tests -q    # 126 项：单元/对抗性/跨平台/CLI/MCP/Fixture/兼容矩阵 全部通过
 ```
 
-## 与开发文档 v1.4 的实现差异
 
-- 目录 `platform/` 更名 `platforms/`：避免遮蔽 Python 标准库 `platform` 模块。
-- LLM 不在线时 L0 流水线照常出报告（文档 §12"离线兜底"的落地）。
-- 语义去重 v2（embedding）未实现，仅精确哈希（文档 §6.4 原规划）。
-- 沙箱容器隔离为可选（需 Docker）；Windows 下降级为 AST+Bandit+超时+HITL。
 - 完整差异与设计说明见[项目说明书 §11](docs/项目说明书.md)。
