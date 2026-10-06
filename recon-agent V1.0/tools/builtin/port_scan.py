@@ -53,6 +53,8 @@ class BuiltinPortScan(BaseTool):
         closed: list[int] = []
         stopped_early = False
         evidence: list[str] = []
+        consecutive_timeouts = 0
+        MAX_CONSECUTIVE_TIMEOUTS = 3  # HARD: 连续超时阈值（非首次即停）
         for port in _expand(params.ports):
             async with self._limiter.slot():
                 try:
@@ -61,15 +63,19 @@ class BuiltinPortScan(BaseTool):
                         timeout=self._settings.CONNECT_TIMEOUT,
                     )
                     open_ports.append(port)
+                    consecutive_timeouts = 0  # 成功重置计数
                     writer.close()
                     evidence.append(f"tcp/{port} open (TCP Connect)")
                 except ConnectionRefusedError:
                     closed.append(port)
+                    consecutive_timeouts = 0
                 except (asyncio.TimeoutError, OSError) as exc:
-                    # HARD: 连接超时/异常 → 立即停止对该目标的主动探测，禁止重试
-                    stopped_early = True
-                    evidence.append(f"tcp/{port} 探测失败({type(exc).__name__}) → 已停止，不重试")
-                    break
+                    consecutive_timeouts += 1
+                    evidence.append(f"tcp/{port} timeout ({consecutive_timeouts}/{MAX_CONSECUTIVE_TIMEOUTS})")
+                    if consecutive_timeouts >= MAX_CONSECUTIVE_TIMEOUTS:
+                        stopped_early = True
+                        evidence.append(f"连续 {consecutive_timeouts} 次超时 → 停止剩余端口探测（HARD）")
+                        break
         return ToolResult(
             name=self.name,
             success=True,
