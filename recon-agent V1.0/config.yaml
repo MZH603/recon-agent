@@ -1,0 +1,23 @@
+# recon-agent 默认配置（HARD：所有阈值集中在 utils/config.py，此处仅模型与运行覆盖项）
+model:
+  provider: litellm
+  name: gpt-4o-mini
+  temperature: 0          # HARD: 结构化任务确定性
+  max_retries: 2
+  timeout: 120
+  fallback:
+    - claude-3-5-sonnet
+    - deepseek-chat
+  custom_endpoints:
+    - name: deepseek
+      base_url: https://api.deepseek.com/v1
+      api_key_env: DEEPSEEK_API_KEY
+      model: deepseek-chat
+    - name: qwen
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api_key_env: DASHSCOPE_API_KEY
+      model: qwen-plus
+    - name: ollama-local
+      base_url: http://localhost:11434/v1
+      api_key_env: OLLAMA_API_KEY
+      model: qwen2.5:32b

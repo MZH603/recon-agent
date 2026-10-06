@@ -1,0 +1,10 @@
+# 沙箱镜像（可选增强，Linux + Docker 时启用；HARD: 断网 + 只读 + 降权）
+FROM python:3.11-slim
+
+RUN useradd --create-home --uid 1000 sandbox
+
+USER sandbox
+WORKDIR /sandbox
+
+# 脚本经 stdin 注入：docker run --rm -i --network=none ... python -
+ENTRYPOINT ["python", "-"]

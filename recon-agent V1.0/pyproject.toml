@@ -1,0 +1,35 @@
+[project]
+name = "recon-agent"
+version = "1.0.0"
+description = "网络安全渗透测试 · 信息搜集 AI Agent V1.0（被动优先 / 三级门控 / 模型无关 / MCP 接入 / 跨平台）"
+readme = "README.md"
+requires-python = ">=3.10"
+# HARD: 核心依赖白名单 ≤5，零死代码
+dependencies = [
+    "typer>=0.9",
+    "rich>=13.0",
+    "pydantic>=2.5",
+    "pyyaml>=6.0",
+    "litellm>=1.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "bandit>=1.7"]
+sandbox = ["bandit>=1.7"]
+
+[project.scripts]
+recon-agent = "cli.main:main"
+recon-agent-mcp = "server.mcp_server:main"
+
+[tool.setuptools.packages.find]
+include = [
+    "cli*", "core*", "model*", "tools*", "collectors*", "knowledge*",
+    "scripts*", "output*", "platforms*", "security*", "gate*", "server*",
+    "efficiency*", "hallucination*", "observability*", "utils*",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.setuptools.package-data]
+tools = ["data/*.txt"]
