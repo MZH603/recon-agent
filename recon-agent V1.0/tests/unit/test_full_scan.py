@@ -2,7 +2,7 @@
 import asyncio
 import json
 
-from scripts.full_scan import load_deep_state, make_cascade_gate
+from scripts.full_scan import load_state, make_cascade_gate, save_state
 
 
 def test_cascade_gate_level1_is_immediately_active():
@@ -23,19 +23,36 @@ def test_cascade_gate_level2_requires_unlock():
     assert ok3 and gate.current_level() == 2 and gate.verify_signature()
 
 
-def test_load_deep_state_interops_with_fleet_state(tmp_path):
-    """与 fleet_l2 的状态文件互通（深度卡片复用，避免重复扫描）。"""
+def test_load_state_per_target_file(tmp_path, monkeypatch):
+    """状态按目标分文件存储（HARD：消除跨目标污染）。"""
     import scripts.full_scan as fs
 
-    fleet = tmp_path / "fleet_l2_state.json"
+    state_path = tmp_path / "reports" / "scan_state_example_com.json"
+    monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
+    state_path.parent.mkdir(parents=True)
     payload = {"deep_cards": [{"host": "a.example.com", "tech": {}}],
-               "dir_results": [{"target": "a.example.com", "success": True, "data": {}}]}
-    fleet.write_text(json.dumps(payload), encoding="utf-8")
-    old = fs.FLEET_STATE
-    fs.FLEET_STATE = fleet
-    try:
-        state = fs.load_deep_state()
-        assert state["done"] == {"a.example.com"} and len(state["deep_cards"]) == 1
-        assert len(state["dir_results"]) == 1
-    finally:
-        fs.FLEET_STATE = old
+               "dir_results": [{"target": "a.example.com", "success": True, "data": {}}],
+               "port_map": {"a.example.com": [80, 443]}}
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = load_state("example.com")
+    assert state["done"] == {"a.example.com"} and len(state["deep_cards"]) == 1
+    assert len(state["dir_results"]) == 1
+    assert state["port_map"] == {"a.example.com": [80, 443]}
+
+
+def test_save_state_merge_semantics(tmp_path, monkeypatch):
+    """save_state 读-改-写合并（HARD：不覆盖既有键——历史数据丢失均源于全量覆盖写）。"""
+    import scripts.full_scan as fs
+
+    state_path = tmp_path / "reports" / "scan_state_example_com.json"
+    monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({"subdomains": ["a.example.com"]}), encoding="utf-8")
+
+    save_state("example.com", {"deep_cards": [{"host": "b.example.com", "tech": {}}],
+                               "dir_results": [], "port_map": {},
+                               "subdomains": ["a.example.com"], "alive": ["a.example.com"]})
+    merged = json.loads(state_path.read_text(encoding="utf-8"))
+    assert merged["subdomains"] == ["a.example.com"]          # 既有键保留
+    assert merged["deep_cards"] == [{"host": "b.example.com", "tech": {}}]  # 新键写入
