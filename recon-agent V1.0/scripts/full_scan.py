@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import sys
@@ -261,11 +262,41 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
             await stage_l2(target, alive, registry, builder, state, done_hosts)
 
     builder.data.scan_level = gate.current_level()
-    metrics_kwargs = {"stealth_violations": violations}
-    paths = builder.save(TaskMetrics(**metrics_kwargs))
+
+    # 从实际扫描成果填充 metrics（非全零）
+    metrics = TaskMetrics()
+    metrics.tool_calls = len(builder.data.tech_cards) + len(builder.data.risk_paths) + 1
+    metrics.tool_success = len([c for c in builder.data.tech_cards if not c.get("error")])
+    metrics.scan_level_reached = gate.current_level()
+    metrics.stealth_violations = violations
+
+    # 填充 next_steps / raw_refs（报告第 8/9 节不再为空）
+    builder.data.next_steps = _build_next_steps(builder.data, gate.current_level())
+    builder.data.raw_refs = [
+        "审计日志: %APPDATA%\\recon-agent\\audit.log（哈希链）",
+        "深度指纹状态: reports/fleet_l2_state.json",
+        "标准报告: reports/recon_<目标>_<时间戳>.md",
+    ]
+
+    paths = builder.save(metrics)
     section("级联扫描完成")
     ok(f"级别 L{gate.current_level()} · 标准报告: {paths['markdown']}")
     return 0
+
+
+def _build_next_steps(data, level: int) -> list[dict]:
+    """根据扫描结果生成下一步行动建议（仅在级联路径中使用）。"""
+    steps = []
+    if data.ips and level == 0:
+        steps.append({"command": f"recon-agent -t {data.target} --authorized --profile stealth",
+                      "purpose": "L1 隐蔽主动：对主目标限速端口扫描", "risk": "中"})
+    if level >= 1:
+        open_non_web = [h for h, ports in data.port_map.items()
+                        if any(p not in (80, 443) for p in ports)]
+        if open_non_web:
+            steps.append({"command": f"对 {', '.join(open_non_web[:3])} 做服务版本确认",
+                          "purpose": "确认非 web 端口上的服务类型", "risk": "中"})
+    return steps
 
 
 def main(argv: list[str] | None = None) -> int:
