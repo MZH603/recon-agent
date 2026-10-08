@@ -16,6 +16,7 @@ from core.orchestration.execution import ExecutionNodes
 from core.orchestration.support import NodeSupport
 from core.orchestration.state import SessionState, initial_state
 from core.orchestration.store import SessionStore
+from core.orchestration.ownership import SessionOwnership
 from efficiency.budget_guard import BudgetGuard
 from gate.scan_gate import ScanGate
 from tools.registry import ToolRegistry
@@ -32,19 +33,23 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
     def __init__(self, *, target: str, registry: ToolRegistry, llm, gate: ScanGate,
                  settings: Settings, db_path: str | Path, session_id: str,
                  system_prompt: str = '', max_decisions: int = 15, max_actions: int = 15,
-                 require_existing: bool = False):
-        if max_decisions < 1 or max_actions < 1:
-            raise ValueError('Task decision and action limits must be positive')
+                 require_existing: bool = False, max_steps: int | None = None):
+        max_steps = max_decisions + max_actions if max_steps is None else max_steps
+        if max_decisions < 1 or max_actions < 1 or max_steps < 1:
+            raise ValueError('Task decision, action and step limits must be positive')
         if registry.main_target != target or gate.target != target or registry._gate is not gate:
             raise ValueError('Registry, gate and runtime must use the same target and gate')
         self.target, self.registry, self.llm, self.gate = target, registry, llm, gate
-        self.settings, self.db_path, self.session_id = settings, Path(db_path), session_id
+        self.settings, self.db_path, self.session_id = settings, Path(db_path).resolve(), session_id
         self.system_prompt = system_prompt
         self.require_existing = require_existing
         self.max_decisions, self.max_actions = max_decisions, max_actions
+        self.max_steps = max_steps
+        self._ownership = SessionOwnership(self.db_path, session_id)
+        self._entered = False
         self.process_id = uuid4().hex
         self.config = {'configurable': {'thread_id': session_id},
-                       'recursion_limit': max_decisions * 10 + max_actions * 10 + 100}
+                       'recursion_limit': max_decisions * 10 + max_actions * 10 + max_steps * 5 + 100}
         self.store = SessionStore(self.db_path)
         self.graph = None
         self._stack = AsyncExitStack()
@@ -52,8 +57,13 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self._permit = None  # one action, in this process only
 
     async def __aenter__(self):
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        if self._entered:
+            raise ValueError(f'Session {self.session_id} runtime is already active')
+        self._entered = True
         try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._ownership.acquire()
+            self._stack.callback(self._ownership.release)
             await self.store.open()
             self._stack.push_async_callback(self.store.close)
             saver = await self._stack.enter_async_context(AsyncSqliteSaver.from_conn_string(str(self.db_path)))
@@ -77,11 +87,17 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             await self._restore_budget()
             return self
         except BaseException:
-            await self._stack.aclose()
+            try:
+                await self._stack.aclose()
+            finally:
+                self._entered = False
             raise
 
     async def __aexit__(self, *exc):
-        await self._stack.aclose()
+        try:
+            await self._stack.aclose()
+        finally:
+            self._entered = False
 
     def _require_open(self):
         if self.graph is None or self.store.connection is None:
@@ -104,6 +120,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         usage = await self.store.usage(self.session_id)
         for key, value in usage.items():
             values[key] = max(values.get(key, 0), value)
+        values['steps'] = values.get('steps', 0)
         values['events'] = await self.store.events(self.session_id)
         values['executions'] = await self.store.executions(self.session_id)
         values['actions'] = max(values.get('actions', 0), await self.store.action_count(self.session_id))
@@ -134,6 +151,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                       'status': 'running', 'pending': None, 'answer': '', 'route': 'decide',
                       'task_id': current.get('task_id') if not current['decisions'] else uuid4().hex,
                       'segment_decisions': current['decisions'], 'segment_actions': current['actions'],
+                      'segment_steps': current['steps'],
                       'schema_attempts': 0}
             await self.graph.ainvoke(values, self.config)
             return await self.state()

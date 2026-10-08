@@ -7,6 +7,8 @@ class SessionState(TypedDict, total=False):
     task_id: str
     segment_decisions: int
     segment_actions: int
+    steps: int
+    segment_steps: int
     session_id: str
     target: str
     messages: list[dict[str, Any]]
@@ -33,6 +35,7 @@ class SessionState(TypedDict, total=False):
 
 def initial_state(session_id: str, target: str, system_prompt: str) -> SessionState:
     return SessionState(task_id=uuid4().hex, segment_decisions=0, segment_actions=0,
+                        steps=0, segment_steps=0,
                         session_id=session_id, target=target,
                         messages=[{'role': 'system', 'content': system_prompt}] if system_prompt else [],
                         plan='', deferred_user=[], queued_calls=[], results=[], answer='', status='idle', pending=None,

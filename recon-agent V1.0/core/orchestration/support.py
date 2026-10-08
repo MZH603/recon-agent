@@ -64,6 +64,7 @@ class NodeSupport:
             messages += [{'role': 'user', 'content': text} for text in deferred]
             deferred = []
         return {'queued_calls': queue, 'messages': messages, 'deferred_user': deferred,
+                'steps': state.get('steps', 0) + 1,
                 'results': state['results'] + ([result] if record else [])}
 
     def _cancel_queue(self, state, reason):

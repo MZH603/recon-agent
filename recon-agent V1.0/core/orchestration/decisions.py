@@ -53,6 +53,10 @@ class DecisionNodes:
     async def _validate(self, state):
         if not state['queued_calls']:
             return {'route': 'decide'}
+        if state.get('steps', 0) - state.get('segment_steps', 0) >= self.max_steps:
+            return self._pause_update('limit',
+                'Queued work limit reached. Continue grants one more bounded segment; budget remains cumulative.',
+                options=['Continue', 'Stop'])
         call = state['queued_calls'][0]
         if call['name'] in CONTROLS:
             try:
@@ -105,7 +109,8 @@ class DecisionNodes:
                 return {'route': 'pause'}
             usage = await self.store.usage(self.session_id)
             segment = {'segment_decisions': max(state['decisions'], usage['decisions']),
-                       'segment_actions': await self.store.action_count(self.session_id)}
+                       'segment_actions': await self.store.action_count(self.session_id),
+                       'segment_steps': state.get('steps', 0)}
         if pending['kind'] == 'ask_user' and state['queued_calls']:
             result = ToolResult(name='ask_user', success=True, data={'answer': value}).model_dump()
             update = self._consume(state, result, record=False)

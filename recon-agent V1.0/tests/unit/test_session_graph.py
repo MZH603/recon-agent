@@ -541,3 +541,177 @@ def test_uncertain_invalid_reply_then_retry_executes_once(tmp_path):
             assert len(state['executions']) == 2
             assert all(item['status'] == 'completed' for item in state['executions'])
     asyncio.run(scenario())
+
+
+def test_active_session_rejects_second_runtime_owner(tmp_path):
+    async def scenario():
+        first, _, _ = fixture(tmp_path, ScriptedLLM())
+        second, _, _ = fixture(tmp_path, ScriptedLLM())
+        async with first:
+            try:
+                async with second:
+                    raise AssertionError('Second owner must be rejected')
+            except ValueError as exc:
+                assert 'active' in str(exc).lower() or 'already' in str(exc).lower()
+            assert (await first.state())['status'] == 'idle'
+        async with second:
+            assert (await second.state())['status'] == 'idle'
+    asyncio.run(scenario())
+
+
+def test_process_owner_blocks_duplicate_and_crash_releases(tmp_path):
+    import subprocess
+    import sys
+
+    child_code = '''
+import asyncio, sys
+from pathlib import Path
+from core.orchestration import SessionRuntime
+from gate.scan_gate import ScanGate
+from tools.registry import ToolRegistry
+from utils.config import Settings
+async def main():
+    settings = Settings()
+    path = Path(sys.argv[1])
+    gate = ScanGate('example.com', auth_dir=path.parent / 'auth')
+    registry = ToolRegistry(settings, gate, 'example.com')
+    async with SessionRuntime(target='example.com', registry=registry, llm=object(), gate=gate,
+                              settings=settings, db_path=path, session_id='test'):
+        print('READY', flush=True)
+        await asyncio.to_thread(sys.stdin.readline)
+asyncio.run(main())
+'''
+    child = subprocess.Popen([sys.executable, '-c', child_code, str(tmp_path / 'session.db')],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == 'READY'
+        async def blocked():
+            runtime, _, _ = fixture(tmp_path, ScriptedLLM())
+            try:
+                async with runtime:
+                    raise AssertionError('Cross-process owner must be rejected')
+            except ValueError as exc:
+                assert 'active' in str(exc).lower() or 'already' in str(exc).lower()
+        asyncio.run(blocked())
+        child.kill()
+        child.wait(timeout=10)
+        async def recovered():
+            runtime, _, _ = fixture(tmp_path, ScriptedLLM(), require_existing=True)
+            async with runtime:
+                assert (await runtime.state())['status'] == 'idle'
+        asyncio.run(recovered())
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
+        for stream in (child.stdin, child.stdout, child.stderr):
+            stream.close()
+
+
+def test_large_control_batch_pauses_at_logical_work_limit(tmp_path):
+    async def scenario():
+        llm = ScriptedLLM(LLMResponse(tool_calls=[NormalizedToolCall(
+            id=f'plan-{index}', name='update_plan', arguments={'plan': str(index)}) for index in range(125)]))
+        runtime, _, _ = fixture(tmp_path, llm, max_decisions=1, max_actions=1)
+        async with runtime:
+            state = await runtime.submit('Plan')
+            assert state['pending']['kind'] == 'limit' and state['steps'] == 2
+            assert len(state['queued_calls']) == 123 and state['plan'] == '1'
+            state = await runtime.resume('Continue')
+            assert state['pending']['kind'] == 'limit' and state['steps'] == 4
+            assert len(state['queued_calls']) == 121 and state['plan'] == '3'
+        restored, _, _ = fixture(tmp_path, ScriptedLLM(), max_decisions=1, max_actions=1)
+        async with restored:
+            assert (await restored.state())['steps'] == 4
+    asyncio.run(scenario())
+
+
+def test_cached_batch_is_bounded_without_dropping_results(tmp_path):
+    async def scenario():
+        llm = ScriptedLLM(LLMResponse(tool_calls=[NormalizedToolCall(
+            id=f'fixture-{index}', name='fixture', arguments={'target': 'example.com'}) for index in range(125)]))
+        runtime, tool, _ = fixture(tmp_path, llm, max_decisions=1, max_actions=1)
+        async with runtime:
+            state = await runtime.submit('Inspect')
+            assert state['pending']['kind'] == 'limit' and state['steps'] == 2
+            assert tool.calls == 1 and len(state['results']) == 2 and state['results'][1]['cached']
+            assert len(state['queued_calls']) == 123
+            state = await runtime.resume('Continue')
+            assert state['steps'] == 4 and state['pending']['kind'] == 'limit' and tool.calls == 1
+            assert all(result['data'] == {'hosts': ['fixture']} for result in state['results'])
+    asyncio.run(scenario())
+
+
+def test_ownership_releases_after_enter_failure(tmp_path):
+    async def scenario():
+        runtime, _, _ = fixture(tmp_path, ScriptedLLM())
+        async def failed_open():
+            raise RuntimeError('fixture setup failure')
+        runtime.store.open = failed_open
+        try:
+            async with runtime:
+                raise AssertionError('Setup should fail')
+        except RuntimeError as exc:
+            assert 'fixture setup failure' in str(exc)
+        restored, _, _ = fixture(tmp_path, ScriptedLLM())
+        async with restored:
+            assert (await restored.state())['status'] == 'idle'
+    asyncio.run(scenario())
+
+
+def test_canonical_path_alias_shares_session_ownership(tmp_path):
+    from core.orchestration import SessionRuntime
+    import os
+
+    async def scenario():
+        first, _, _ = fixture(tmp_path, ScriptedLLM())
+        alias = tmp_path / 'unused' / '..' / ('SESSION.DB' if os.name == 'nt' else 'session.db')
+        second = SessionRuntime(target=first.target, registry=first.registry, llm=ScriptedLLM(),
+                                gate=first.gate, settings=first.settings, db_path=alias, session_id='test')
+        async with first:
+            try:
+                async with second:
+                    raise AssertionError('Canonical path alias must share the owner lock')
+            except ValueError as exc:
+                assert 'active' in str(exc).lower()
+    asyncio.run(scenario())
+
+
+def test_explicit_step_limit_scales_graph_recursion_budget(tmp_path):
+    async def scenario():
+        llm = ScriptedLLM(LLMResponse(tool_calls=[NormalizedToolCall(
+            id=f'plan-{index}', name='update_plan', arguments={'plan': str(index)}) for index in range(125)]))
+        runtime, _, _ = fixture(tmp_path, llm, max_decisions=1, max_actions=1, max_steps=130)
+        async with runtime:
+            state = await runtime.submit('Plan')
+            assert state['pending']['kind'] == 'limit' and state['steps'] == 125
+            assert state['plan'] == '124' and not state['queued_calls']
+            assert len([message for message in state['messages'] if message['role'] == 'tool']) == 125
+    asyncio.run(scenario())
+
+
+def test_concurrent_enter_same_runtime_keeps_original_owner(tmp_path):
+    async def scenario():
+        runtime, _, _ = fixture(tmp_path, ScriptedLLM())
+        ready, proceed = asyncio.Event(), asyncio.Event()
+        original_open = runtime.store.open
+        async def delayed_open():
+            value = await original_open()
+            ready.set()
+            await proceed.wait()
+            return value
+        runtime.store.open = delayed_open
+        entering = asyncio.create_task(runtime.__aenter__())
+        await ready.wait()
+        try:
+            try:
+                await runtime.__aenter__()
+                raise AssertionError('Concurrent enter must be rejected')
+            except ValueError:
+                pass
+            assert runtime._ownership.handle is not None
+        finally:
+            proceed.set()
+            await entering
+            await runtime.__aexit__(None, None, None)
+    asyncio.run(scenario())
