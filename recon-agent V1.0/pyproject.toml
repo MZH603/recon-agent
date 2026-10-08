@@ -24,6 +24,7 @@ recon-agent = "cli.main:main"
 recon-agent-mcp = "server.mcp_server:main"
 
 [tool.setuptools.packages.find]
+namespaces = false
 include = [
     "cli*", "core*", "model*", "tools*", "collectors*", "knowledge*",
     "scripts*", "output*", "platforms*", "security*", "gate*", "server*",
@@ -35,3 +36,4 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 tools = ["data/*.txt"]
+cli = ["pi/app.mjs", "pi/view.mjs", "pi/bridge.mjs", "pi/package.json", "pi/package-lock.json"]

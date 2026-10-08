@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import net from 'node:net';
+import {connectBridge} from './bridge.mjs';
+test('real TCP bridge decodes split Unicode and sends local commands',async()=>{
+ const server=net.createServer();await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ const connected=new Promise(resolve=>server.once('connection',resolve));
+ const events=[];let closed;
+ const close=new Promise(resolve=>closed=resolve);
+ const client=await connectBridge({port:server.address().port,token:'test-token',onEvent:e=>events.push(e),onClose:closed});
+ const socket=await connected;
+ const hello=await new Promise(resolve=>socket.once('data',resolve));
+ assert.equal(JSON.parse(hello).token,'test-token');
+ const bytes=Buffer.from(JSON.stringify({type:'preview',text:'中文😀'})+'\n');
+ for(const byte of bytes)socket.write(Buffer.from([byte]));
+ await new Promise(resolve=>setImmediate(resolve));
+ client.send({type:'input',text:'任务'});
+ const command=await new Promise(resolve=>socket.once('data',resolve));
+ assert.equal(JSON.parse(command).text,'任务');
+ socket.end();await close;
+ assert.deepEqual(events,[{type:'preview',text:'中文😀'}]);
+ await new Promise(resolve=>server.close(resolve));
+});

@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from pathlib import Path
 
 
 def _decode(raw: bytes | None) -> str:
     """统一 UTF-8 解码，坏字节不炸。"""
     return (raw or b"").decode("utf-8", errors="replace")
+
+
+async def kill_and_reap(proc):
+    """Drain pipes and reap a cancelled tool before releasing the session owner."""
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    await proc.communicate()
 
 
 async def run_command(
@@ -20,7 +29,7 @@ async def run_command(
 
     - 仅 exec 数组形式，不经过 shell（HARD）；
     - 超时强制 kill 并返回码 124；
-    - 任何异常都收敛为错误返回值，不向上抛（分层错误处理）。
+    - 启动错误收敛为错误返回值；取消先回收进程再向上抛。
     """
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -38,7 +47,9 @@ async def run_command(
             timeout=timeout,
         )
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        await kill_and_reap(proc)
         return 124, "", f"[timeout] 命令超过 {timeout}s 已强制终止"
+    except asyncio.CancelledError:
+        await kill_and_reap(proc)
+        raise
     return (proc.returncode or 0, _decode(out), _decode(err))

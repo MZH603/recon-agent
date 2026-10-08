@@ -10,6 +10,11 @@
 
 Python ≥ 3.10。核心依赖由 `pyproject.toml` 安装，包括 LiteLLM、LangGraph 和 SQLite checkpoint 支持。
 
+交互会话默认使用 Pi 主屏终端界面（`@earendil-works/pi-tui` 精确版本 1.0.4），需要 Node.js ≥22.19.0。
+在项目目录执行 `npm ci --ignore-scripts --prefix cli/pi`；wheel 安装后可用
+`python -c "from cli.pi_bridge import PI_DIR; print(PI_DIR)"` 找到该目录，再切换到该目录执行 `npm ci --ignore-scripts`。
+依赖只安装在本机该目录，不自动联网安装。模型、LangGraph、门控和 SQLite 仍由 Python 后端负责；Node 界面不接收模型凭据。
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev]"
@@ -76,7 +81,9 @@ model:
 
 启动打印会话 ID 和恢复命令。在 `recon>` 输入中文或自然语言任务，例如“仅查询 example.com 的 A 记录，然后总结来源”。回复待确认问题时恢复当前节点。仅在显式任务之后才可能调用模型或工具。
 
-Python CLI 的 Rich 兼容界面支持真实流式回复：提交任务立即显示等待模型与耗时，逐段展示普通文本及 `finish_task.answer` / `ask_user.question`，执行已获授权工具时展示进度与结果。完整工具参数通过校验前不会执行；工具 JSON、XML 控制块、推理标签和终端控制字符不会直接出现在回复预览中。原生文本已预览时，结束状态或待回复提示不重复打印全文。输出重定向、非 TTY 或 dumb terminal 使用普通逐段文本，无动画或 ANSI 重绘。
+正常交互终端的 `--ui auto` 默认选择 Pi：提交任务立即显示底部加载态，回答和问题逐段 Markdown 展示；Editor 支持多行（Shift+Enter）和上下键历史。工具执行显示状态，已预览答案/问题在终态去重。完整工具参数通过校验前不会执行；工具 JSON、XML 控制块、推理标签和终端控制字符不会直接出现在回复预览中。Ctrl+C 取消并以 130 退出；界面断开也会取消任务并保存已消耗用量，不继续后台执行。
+
+`--ui rich` 使用已有 Rich 兼容界面；`--ui pi` 明确要求 Pi 依赖可用。`auto` 缺少本地依赖时会明确提示并回退 Rich，`pi` 则给出安装提示并退出。输出重定向、非 TTY、dumb terminal 或 `--batch` 使用已有纯文本路径，界面选择不会改变原有授权和 L2 门控。
 
 首块前的连接错误可以重试或切换备用模型；响应已经开始后断流会暂停，已显示片段标为未完成，需要显式继续。Ctrl+C 保留退出码 130 和恢复命令，关闭模型流并释放会话锁。完整调用只计量一次；断流或取消保存已知 token 或保守估算，未提供 usage 的成功流也估算 token，费用无法确定时计入未知调用。流式观察事件仅在当前进程内用于界面展示，不写入 checkpoint 或授予权限。
 

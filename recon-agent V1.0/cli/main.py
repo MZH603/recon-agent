@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 import typer
@@ -59,6 +60,7 @@ def run(
     lab: bool = typer.Option(False, "--lab", help="实验环境模式：解锁内网/环回目标（仅限自有/自建环境）"),
     session: bool = typer.Option(False, "--session", help="会话模式（REPL，可逐步升级 L1/L2）"),
     resume: str = typer.Option(None, "--resume", help="恢复已有会话 ID（必须配合 --session）"),
+    ui: str = typer.Option('auto', '--ui', help='会话界面: auto|pi|rich'),
     mcp_mode: bool = typer.Option(False, "--mcp", help="MCP stdio 服务器模式（供第三方 Agent 接入）"),
     authorized_for: str = typer.Option(None, "--authorized-for", help="MCP 模式授权范围（逗号分隔域名，HARD 必填）"),
     allow_l1: bool = typer.Option(False, "--allow-l1", help="MCP 模式放行 L1（HARD：L2 在 MCP 下永久禁止）"),
@@ -78,6 +80,9 @@ def run(
     """对授权目标执行信息搜集，或以 MCP 服务器模式供 Agent 接入。"""
     if (resume and not session) or (mcp_mode and (session or resume)):
         err("--resume 必须配合 --session；会话与 --mcp 不兼容")
+        raise typer.Exit(2)
+    if ui not in ('auto', 'pi', 'rich'):
+        err('--ui 必须为 auto|pi|rich')
         raise typer.Exit(2)
     if not mcp_mode:
         console.print(BANNER)
@@ -108,7 +113,19 @@ def run(
         from cli import pipeline, session as session_mod
 
         if session:
-            return await session_mod.run_session(
+            runner = session_mod.run_session
+            if is_tty and sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and not batch and ui != 'rich':
+                from cli.pi_bridge import pi_available
+                available, reason = pi_available()
+                if available:
+                    from cli.pi_session import run_pi_session
+                    runner = run_pi_session
+                elif ui == 'pi':
+                    err('Pi 界面不可用: ' + reason)
+                    return 2
+                else:
+                    warn('Pi 依赖未安装，使用 Rich 兼容界面。' + reason)
+            return await runner(
                 target=target, settings=settings, batch=batch, is_tty=is_tty,
                 requested_level=requested, model_override=model,
                 output_format=output_format, output_dir=output,
