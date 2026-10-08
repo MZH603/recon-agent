@@ -9,12 +9,6 @@ from model.registry import build_provider, resolve_model
 from utils.config import Settings
 
 
-@pytest.fixture(autouse=True)
-def clear_connection_environment(monkeypatch):
-    for name in ('RECON_MODEL', 'RECON_API_BASE', 'RECON_API_KEY'):
-        monkeypatch.delenv(name, raising=False)
-
-
 @pytest.fixture
 def sdk_calls(monkeypatch):
     calls = []
