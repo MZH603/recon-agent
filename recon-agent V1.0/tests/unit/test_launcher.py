@@ -259,3 +259,61 @@ def test_noninteractive_cli_never_opens_setup(monkeypatch):
         result = CliRunner().invoke(app, arguments)
         assert result.exit_code == 2
         assert '交互终端' in result.output
+
+
+@pytest.mark.parametrize('target', ['agency.ｇｏｖ', 'agency。gov', 'https://agency。gov/',
+                                  '8.0.0.0/6', '8.0.0.0/5', '100.0.0.0/8', '2000::/3'])
+def test_canonical_protected_domain_and_entire_cidr_are_rejected(tmp_path, target):
+    from cli.launcher import prefill, validate_setup
+    from utils.config import Settings
+    settings = Settings()
+    result, errors = validate_setup(dict(type='configure', api_base='https://api.test/v1', model='model', target=target, api_key=KEY, authorized=True), prefill(settings, config_dir=tmp_path), settings)
+    assert result is None and 'target' in errors
+
+
+@pytest.mark.parametrize('target,canonical', [
+    ('例子.example.org', 'xn--fsqu00a.example.org'),
+    ('Example。ORG.', 'example.org'),
+    ('https://例子.example.org:8443/path', 'https://xn--fsqu00a.example.org:8443/path'),
+])
+def test_confirmed_target_uses_same_canonical_host_as_protection(tmp_path, target, canonical):
+    from cli.launcher import prefill, validate_setup
+    from utils.config import Settings
+    settings = Settings()
+    result, errors = validate_setup(dict(type='configure', api_base='https://api.test/v1', model='model', target=target, api_key=KEY, authorized=True), prefill(settings, config_dir=tmp_path), settings)
+    assert not errors and result.target == canonical
+
+
+@pytest.mark.parametrize('target,allowed', [('8.0.0.0/6', True), ('100.0.0.0/8', True),
+                                         ('168.0.0.0/6', False), ('fe00::/7', False)])
+def test_lab_cidr_unlocks_private_but_never_link_local(tmp_path, target, allowed):
+    from cli.launcher import prefill, validate_setup
+    from utils.config import Settings
+    settings = Settings(LAB_MODE=True)
+    result, errors = validate_setup(dict(type='configure', api_base='https://api.test/v1', model='model', target=target, api_key=KEY, authorized=True), prefill(settings, config_dir=tmp_path), settings)
+    assert bool(result) is allowed
+
+
+@pytest.mark.parametrize('target', ['8.8.8.0/24', '192.0.0.9/32', '192.0.0.10/32',
+                                  '2001:4860::/32', '2001:1::1/128', '2001:3::/32',
+                                  '::ffff:8.8.8.0/120'])
+def test_cidr_preserves_globally_routable_special_exceptions(tmp_path, target):
+    from cli.launcher import prefill, validate_setup
+    from utils.config import Settings
+    settings = Settings()
+    result, errors = validate_setup(dict(type='configure', api_base='https://api.test/v1', model='model', target=target, api_key=KEY, authorized=True), prefill(settings, config_dir=tmp_path), settings)
+    assert result is not None and not errors
+
+
+@pytest.mark.parametrize('target,allowed', [('8.0.0.0/6', False), ('192.0.0.9/32', True),
+                                         ('2000::/3', False), ('2001:3::/32', True)])
+def test_network_registry_fallback_retains_protection_and_global_exceptions(monkeypatch, target, allowed):
+    import ipaddress
+    from types import SimpleNamespace
+    from cli.launcher import _allowed_network
+    from utils.config import Settings
+    network = ipaddress.ip_network(target)
+    # Classification still uses real stdlib Address/Network objects. Only the
+    # optional internal registry accessor is absent, as on a changed runtime.
+    monkeypatch.setattr('cli.launcher.ipaddress.ip_address', lambda value: SimpleNamespace())
+    assert _allowed_network(network, Settings()) is allowed

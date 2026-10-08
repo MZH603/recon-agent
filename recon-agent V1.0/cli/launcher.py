@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 import tempfile
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, Field, SecretStr
 
@@ -117,42 +117,109 @@ def valid_api_base(value):
         return False
 
 
-def valid_target(value, settings):
-    if not valid_text(value, 'target') or any(c.isspace() for c in value) or '\\' in value:
+def _special_networks(version):
+    """Use the same registry ranges as ipaddress.is_global on each Python version.
+
+    Network.is_global tests endpoints, so ranges must also be checked for overlap.
+    Keep the version-dependent stdlib detail here, with a conservative fallback.
+    """
+    address = ipaddress.ip_address('0.0.0.0' if version == 4 else '::')
+    constants = getattr(address, '_constants', None)
+    fallback = {
+        4: ('0.0.0.0/8', '10.0.0.0/8', '127.0.0.0/8', '169.254.0.0/16',
+            '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24', '192.168.0.0/16',
+            '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '240.0.0.0/4'),
+        6: ('::/128', '::1/128', '::ffff:0:0/96', '64:ff9b:1::/48', '100::/64',
+            '2001::/23', '2001:db8::/32', '2002::/16', '3fff::/20', 'fc00::/7', 'fe80::/10'),
+    }
+    ranges = getattr(constants, '_private_networks', None)
+    exceptions = getattr(constants, '_private_networks_exceptions', ())
+    if ranges is None:
+        ranges = [ipaddress.ip_network(value) for value in fallback[version]]
+        fallback_exceptions = {
+            4: ('192.0.0.9/32', '192.0.0.10/32'),
+            6: ('2001:1::1/128', '2001:1::2/128', '2001:3::/32', '2001:4:112::/48',
+                '2001:20::/28', '2001:30::/28'),
+        }
+        exceptions = [ipaddress.ip_network(value) for value in fallback_exceptions[version]]
+    if version == 4:
+        ranges = [*ranges, ipaddress.ip_network('100.64.0.0/10')]
+    return ranges, exceptions
+
+
+def _allowed_network(network, settings):
+    link_local = ipaddress.ip_network('169.254.0.0/16' if network.version == 4 else 'fe80::/10')
+    if network.overlaps(link_local):
         return False
+    mapped = ipaddress.ip_network('::ffff:0:0/96') if network.version == 6 else None
+    if mapped is not None and network.overlaps(mapped):
+        part = network if network.subnet_of(mapped) else mapped
+        v4 = ipaddress.ip_network(f'{part.network_address.ipv4_mapped}/{part.prefixlen - 96}', strict=False)
+        if not _allowed_network(v4, settings):
+            return False
+        if network.subnet_of(mapped):
+            return True
+    if settings.LAB_MODE:
+        return True
+    if not network.is_global:
+        return False
+    ranges, exceptions = _special_networks(network.version)
+    for special in ranges:
+        if mapped is not None and special == mapped:
+            continue  # IPv4-mapped ranges were classified as IPv4 above.
+        if network.overlaps(special):
+            part = network if network.subnet_of(special) else special
+            if not any(part.subnet_of(exception) for exception in exceptions):
+                return False
+    return True
+
+
+def canonical_target(value, settings):
+    """Return the exact canonical target used by protection and session scope."""
+    if not valid_text(value, 'target') or any(c.isspace() for c in value) or '\\' in value:
+        return None
     try:
         if '/' in value and '://' not in value:
             network = ipaddress.ip_network(value, strict=False)
-            # Validate both ends and reject protected ranges anywhere in the CIDR.
-            link_local = ('169.254.0.0/16',) if network.version == 4 else ('fe80::/10',)
-            if any(network.overlaps(ipaddress.ip_network(n)) for n in link_local):
-                return False
-            return all(allowed_target(str(ip), settings)[0] for ip in (network.network_address, network.broadcast_address))
+            return str(network) if _allowed_network(network, settings) else None
+        url = None
         if '://' in value:
             url = urlsplit(value)
             if (url.scheme not in ('http', 'https') or url.username is not None or
                     url.password is not None or url.query or url.fragment):
-                return False
+                return None
             if url.port == 0:
-                return False
+                return None
             host = url.hostname
         else:
             host = value
         if not host:
-            return False
+            return None
         try:
-            ipaddress.ip_address(host)
+            host = str(ipaddress.ip_address(host))
         except ValueError:
-            domain = host.rstrip('.').encode('idna').decode('ascii')
+            domain = host.encode('idna').decode('ascii').lower().rstrip('.')
             if len(domain) > 253 or not all(re.fullmatch(r'[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?', x) for x in domain.split('.')):
-                return False
+                return None
             if domain != 'localhost' and '.' not in domain:
-                return False
+                return None
             if re.fullmatch(r'[0-9.]+', domain):
-                return False
-        return allowed_target(host, settings)[0]
+                return None
+            host = domain
+        if not allowed_target(host, settings)[0]:
+            return None
+        if url is not None:
+            authority = f'[{host}]' if ':' in host else host
+            if url.port is not None:
+                authority += f':{url.port}'
+            return urlunsplit((url.scheme, authority, url.path, '', ''))
+        return host
     except (ValueError, UnicodeError):
-        return False
+        return None
+
+
+def valid_target(value, settings):
+    return canonical_target(value, settings) is not None
 
 
 def validate_setup(payload, defaults, settings):
@@ -166,7 +233,8 @@ def validate_setup(payload, defaults, settings):
         errors['authorized'] = ERRORS['authorized']
     if 'api_base' not in errors and not valid_api_base(payload['api_base']):
         errors['api_base'] = ERRORS['api_base']
-    if 'target' not in errors and not valid_target(payload['target'], settings):
+    target = canonical_target(payload['target'], settings) if 'target' not in errors else None
+    if target is None:
         errors['target'] = ERRORS['target']
     key = optional_api_key(payload['api_key']) if 'api_key' not in errors else None
     key = key or defaults.api_key
@@ -177,7 +245,7 @@ def validate_setup(payload, defaults, settings):
     name = payload['model'].strip()
     connection = ModelSpec(model=name if '/' in name else 'openai/' + name,
                            api_base=payload['api_base'].strip().rstrip('/'), api_key=key)
-    return SetupResult(target=payload['target'].strip(), connection=connection), {}
+    return SetupResult(target=target, connection=connection), {}
 
 
 async def run_rich_setup(defaults, settings):
