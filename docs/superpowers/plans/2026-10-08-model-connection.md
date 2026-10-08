@@ -20,10 +20,10 @@ Files: utils/config.py, model/registry.py, model/litellm_adapter.py; tests/unit/
 ## Task 2: Review and integration
 
 - [x] Independent spec then quality review; correct material issues with regression tests.
-- [ ] Integrate into original main, run original-workspace regression and idle startup smoke. Mark steps and validation record; no publication.
+- [x] Integrate into original main, run original-workspace regression and idle startup smoke. Mark steps and validation record; no publication.
 
 ## Verification record
 
 - Implementation `814f7c7`: expected RED failures confirmed, then 227 passed / 1 deselected in full offline regression.
 - Independent design/spec/quality review passed; focused independent model/connection/cost suite: 39 passed.
-- Original workspace integration and final regression remain to be performed. No real API requests or external scans.
+- Fast-forwarded into original main. Original-workspace final regression: 227 passed / 1 deselected in 21.29s. Default YAML connection fields loaded correctly and installed console idle/status/quit smoke passed with zero model/tool actions. No real API requests or external scans.
