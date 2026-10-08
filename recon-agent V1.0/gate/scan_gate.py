@@ -45,6 +45,7 @@ class ScanGate:
         self._aborted = False
         self._level = 0
         self._unlocked = False
+        self._l2_next_step = 1
         self.confirm_log: list[dict] = []
         self.sig_path: Path | None = None
         self.downgrade_notice = ""
@@ -95,6 +96,7 @@ class ScanGate:
         if self._aborted or self.batch_mode or not self.is_tty:
             return False, ""  # HARD: 非交互永久禁止 L2
         if step == 1:
+            self._l2_next_step = 1
             text = await self._ask(
                 f"[!] 进入 L2 需三次独立确认（当前 1/3）\n    本次计划：{plan}\n"
                 f"    请输入 {L2_STEP_CODE_1} 继续（不接受 y/yes/确认）："
@@ -106,6 +108,8 @@ class ScanGate:
                 self.abort()
             return False, text
         if step == 2:
+            if self._l2_next_step != 2:
+                return False, ""
             text = await self._ask(
                 f"[2/3] 请输入授权目标精确字符串（输入 \"{self.target}\" 继续，防误确认）："
             )
@@ -116,6 +120,8 @@ class ScanGate:
                 self.abort()
             return False, text
         if step == 3:
+            if self._l2_next_step != 3:
+                return False, ""
             text = await self._ask(
                 "[3/3] 最终确认：L2 全部动作将逐项确认、可随时 abort 中止。\n"
                 f"    输入 {L2_STEP_CODE_3} 解锁："
@@ -130,14 +136,15 @@ class ScanGate:
         return False, ""
 
     def unlock_level_2(self) -> None:
-        """生成签名文件 auth/<target>.sig（HARD：SHA256 + 时间戳 + 操作者指纹）。"""
+        """生成签名文件 auth/<target-hash>.sig（HARD：SHA256 + 时间戳 + 操作者指纹）。"""
         operator = hashlib.sha256(
             f"{getpass.getuser()}@{platform.node()}".encode("utf-8")
         ).hexdigest()[:16]
         issued = time.strftime("%Y-%m-%dT%H:%M:%S")
         sig = hashlib.sha256(f"{self.target}|{operator}|{issued}".encode("utf-8")).hexdigest()
         self._auth_dir.mkdir(parents=True, exist_ok=True)
-        self.sig_path = self._auth_dir / f"{self.target}.sig"
+        target_key = hashlib.sha256(self.target.encode("utf-8")).hexdigest()
+        self.sig_path = self._auth_dir / f"{target_key}.sig"
         self.sig_path.write_text(
             json.dumps({"target": self.target, "operator": operator,
                         "issued": issued, "sig": sig}, ensure_ascii=False, indent=2),
@@ -151,11 +158,14 @@ class ScanGate:
         """校验本会话生成的签名文件（HARD：不匹配拒绝；跨会话因 _unlocked=False 直接无效）。"""
         if not self._unlocked or self.sig_path is None or not self.sig_path.exists():
             return False
-        data = json.loads(self.sig_path.read_text(encoding="utf-8"))
-        expected = hashlib.sha256(
-            f"{data['target']}|{data['operator']}|{data['issued']}".encode("utf-8")
-        ).hexdigest()
-        return data.get("sig") == expected and data.get("target") == self.target
+        try:
+            data = json.loads(self.sig_path.read_text(encoding="utf-8"))
+            expected = hashlib.sha256(
+                f"{data['target']}|{data['operator']}|{data['issued']}".encode("utf-8")
+            ).hexdigest()
+            return data.get("sig") == expected and data.get("target") == self.target
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
 
     # ---------- L2：逐项确认 ----------
     async def confirm_step(self, action: str, command: str, risk: str) -> bool:
@@ -180,11 +190,18 @@ class ScanGate:
         """立即退回 L0（HARD：中止不可撤销，需重新走完整门控）。"""
         self._aborted = True
         self._unlocked = False
+        self._l2_next_step = 1
         self._level = 0
         audit("gate_abort", {"target": self.target})
 
     # ---------- 内部 ----------
     def _log_confirm(self, kind: str, text: str) -> None:
+        if kind == "l2_step1":
+            self._l2_next_step = 2
+        elif kind == "l2_step2":
+            self._l2_next_step = 3
+        elif kind == "l2_step3":
+            self._l2_next_step = 1
         self.confirm_log.append({"kind": kind, "text": text.strip(), "ts": time.time()})
         audit("gate_confirm", {"kind": kind, "target": self.target})
 
