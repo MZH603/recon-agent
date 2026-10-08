@@ -89,3 +89,56 @@ def test_degraded_and_paused_validation_failures_are_reported(tmp_path):
     text=paths['markdown'].read_text(encoding='utf-8')
     assert '[降级模式]' in text and '[INCOMPLETE]' in text
     assert 'valid parameters?' in text and 'budget' in text
+
+
+def test_dns_actual_answer_types_separate_cname_from_a_and_keep_sources(tmp_path):
+    import csv
+    from output import session_report
+    records = [{'name': 'example.com', 'type': 5, 'data': 'example.cdn.test'},
+               {'name': 'example.cdn.test', 'type': 1, 'data': '192.0.2.1'}]
+    observation = result('dns_query', {'target': 'example.com', 'rtype': 'A', 'records': records})
+    state = {'target': 'example.com', 'status': 'completed', 'results': [observation]}
+    paths = session_report.save_session_report(state, 0, 'json', tmp_path)
+    payload = json.loads(paths['json'].read_text(encoding='utf-8'))
+    assert payload['report']['dns'] == {'CNAME': ['example.cdn.test'], 'A': ['192.0.2.1']}
+    assert payload['report']['ips'] == ['192.0.2.1']
+    assert payload['session']['results'] == payload['observations'] == [observation]
+    body = paths['markdown'].read_text(encoding='utf-8')
+    ip_line = next(line for line in body.splitlines() if line.startswith('- 解析 IP:'))
+    assert 'example.cdn.test' not in ip_line and '192.0.2.1' in ip_line
+    assert 'example.cdn.test' in body and 'fixture://evidence' in body and 'abc' in body
+    with paths['csv'].open(encoding='utf-8', newline='') as handle:
+        ip_rows = [row for row in csv.reader(handle) if row and row[0] == 'ip']
+    assert ip_rows == [['ip', '192.0.2.1', '解析记录']]
+
+
+def test_dns_aaaa_malformed_unknown_and_socket_records_are_not_misclassified(tmp_path):
+    import csv
+    from output import session_report
+    records = [{'type': 5, 'data': 'v6.cdn.test'},
+               {'type': 28, 'data': '2001:db8::1'},
+               {'type': 28, 'data': '192.0.2.3'},  # Wrong family for AAAA.
+               {'type': 1, 'data': '2001:db8::2'},  # Wrong family for A.
+               {'type': 1, 'data': 'not-an-address'},
+               {'type': 28, 'data': None},
+               {'type': 99, 'data': 'opaque unknown record'}]
+    doh = result('dns_query', {'rtype': 'AAAA', 'records': records})
+    socket = result('dns_query', {'rtype': 'A', 'records': [{'data': '192.0.2.4'},
+                                                            {'data': 'fallback.invalid'}]})
+    state = {'target': 'example.com', 'status': 'completed', 'results': [doh, socket]}
+    paths = session_report.save_session_report(state, 0, 'json', tmp_path)
+    payload = json.loads(paths['json'].read_text(encoding='utf-8'))
+    dns = payload['report']['dns']
+    assert dns['CNAME'] == ['v6.cdn.test']
+    assert dns['AAAA'] == ['2001:db8::1', '192.0.2.3', None]
+    assert dns['A'] == ['2001:db8::2', 'not-an-address', '192.0.2.4', 'fallback.invalid']
+    assert dns['TYPE99'] == ['opaque unknown record']
+    assert payload['report']['ips'] == ['192.0.2.4', '2001:db8::1']
+    assert payload['observations'] == [doh, socket]
+    body = paths['markdown'].read_text(encoding='utf-8')
+    ip_line = next(line for line in body.splitlines() if line.startswith('- 解析 IP:'))
+    assert 'v6.cdn.test' not in ip_line and 'fallback.invalid' not in ip_line
+    assert 'fixture://evidence' in body and 'opaque unknown record' in body
+    with paths['csv'].open(encoding='utf-8', newline='') as handle:
+        ip_assets = [row[1] for row in csv.reader(handle) if row and row[0] == 'ip']
+    assert ip_assets == ['192.0.2.4', '2001:db8::1']

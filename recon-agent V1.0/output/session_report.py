@@ -1,11 +1,15 @@
 """Adapt durable evidence to standard reports and preserve the entire audit state."""
 from __future__ import annotations
 import json
+from ipaddress import ip_address
 from uuid import uuid4
 from observability.metrics import TaskMetrics
 from output.report import save_report, INCOMPLETE_WATERMARK, DEGRADED_WATERMARK
 from output.report_builder import ReportBuilder
 from tools.base import ToolResult
+from tools.builtin.dns_query import RTYPE_CODES
+
+DNS_TYPES = {code: name for name, code in RTYPE_CODES.items()}
 
 
 def _observations(state):
@@ -17,6 +21,25 @@ def _observations(state):
                             'target': entry.get('target') or state['target'],
                             'arguments': entry.get('arguments', {})})
     return results
+
+
+
+def _add_dns(data, item):
+    """DoH answers carry their own type; socket fallback answers do not."""
+    for record in item.get('records', []):
+        kind = (DNS_TYPES.get(record['type'], f"TYPE{record['type']}") if 'type' in record
+                else item.get('rtype', 'unknown'))
+        value = record.get('data', '')
+        data.dns.setdefault(kind, []).append(value)
+        if kind not in ('A', 'AAAA') or not isinstance(value, str):
+            continue
+        try:
+            address = ip_address(value)
+        except ValueError:
+            continue
+        expected_version = 4 if kind == 'A' else 6
+        if address.version == expected_version:
+            data.ips.append(str(address))
 
 
 def build_session_report(state, level):
@@ -36,11 +59,7 @@ def build_session_report(state, level):
             data.notes.append(f'{name} {host}: 失败/拦截 — {result.error}')
             continue
         if name == 'dns_query':
-            kind = item.get('rtype', 'unknown')
-            records = [r.get('data', '') for r in item.get('records', [])]
-            data.dns.setdefault(kind, []).extend(records)
-            if kind in ('A', 'AAAA'):
-                data.ips.extend(records)
+            _add_dns(data, item)
         elif name == 'subdomain_enum':
             data.subdomains.extend(item.get('subdomains', []))
             for alive in item.get('alive', []):
