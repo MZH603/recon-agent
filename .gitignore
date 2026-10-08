@@ -1,9 +1,36 @@
 .worktrees/
+.worktress/
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
 node_modules/
+# Temporary files, editor backups, and build/test artifacts.
+.tmp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*.bak
+*.orig
+*.rej
+build/
+dist/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+# Local runtime state and credentials.
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+*.log
+.env
+.env.*
+!.env.example
 # Local AI planning, design notes, and verification records.
 /docs/superpowers/
