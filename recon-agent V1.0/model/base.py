@@ -40,6 +40,8 @@ def observe(callback: Callable | None, event: Any) -> None:
 
 
 def response_events(response: 'LLMResponse', callback: Callable | None) -> None:
+    if response.reasoning_content:
+        observe(callback, StreamEvent('reasoning', content=response.reasoning_content))
     if response.content:
         observe(callback, StreamEvent('content', content=response.content))
     for index, call in enumerate(response.tool_calls):
@@ -55,7 +57,7 @@ class StreamUsage:
         self.usage = {}
 
     def add(self, event: StreamEvent):
-        if event.kind in ('chunk', 'content', 'tool', 'usage'):
+        if event.kind in ('chunk', 'content', 'tool', 'usage', 'reasoning'):
             self.started = True
         self.output += event.content + event.arguments
         if event.token_usage:
@@ -85,6 +87,7 @@ class LLMResponse(BaseModel):
     """统一 LLM 响应。"""
 
     content: str = ""
+    reasoning_content: str = ""  # Provider protocol history, never a user-facing answer.
     tool_calls: list[NormalizedToolCall] = Field(default_factory=list)
     token_usage: dict = Field(default_factory=lambda: {"input": 0, "output": 0})
     model: str = ""

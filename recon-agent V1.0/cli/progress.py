@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from xml.parsers import expat
 from time import monotonic
 
 from rich.console import Console, Group
@@ -102,6 +103,49 @@ def control_text(arguments: str, field: str) -> str:
         return ''
 
 
+def xml_dialogue(raw: str):
+    """Preview only direct dialogue fields of the existing XML fallback protocol.
+
+    Expat accepts an unfinished document, delivers text immediately and holds
+    split tags/entities itself. This parser observes text; runtime still parses
+    and validates the complete call separately before executing anything.
+    """
+    raw = re.sub(r'<\s*(think|thinking|analysis|reasoning)(?:\s[^>]*)?>.*?(?:</\s*\1\s*>|$)',
+                 '', raw, flags=re.I | re.S)
+    for index, block in enumerate(re.finditer(r'<tool_call>(.*?)(?:</tool_call>|$)', raw, re.S)):
+        stack, name, text = [], [], []
+        field = None
+        parser = expat.ParserCreate()
+
+        def start(tag, attributes):
+            stack.append(tag)
+
+        def end(tag):
+            nonlocal field
+            if stack == ['tool_call', 'tool_name']:
+                field = {'finish_task': 'answer', 'ask_user': 'question'}.get(''.join(name).strip())
+            stack.pop()
+
+        def data(value):
+            if stack == ['tool_call', 'tool_name']:
+                name.append(value)
+            elif field and stack == ['tool_call', 'parameters', field]:
+                text.append(value)
+
+        def reject_doctype(*args):
+            raise ValueError('Declarations are not dialogue')
+
+        parser.StartElementHandler, parser.EndElementHandler = start, end
+        parser.CharacterDataHandler = data
+        parser.StartDoctypeDeclHandler = reject_doctype
+        parser.ExternalEntityRefHandler = lambda *args: 0
+        try:
+            parser.Parse('<tool_call>' + block.group(1), False)
+        except (expat.ExpatError, ValueError):
+            pass  # Only an observed prefix; malformed output never executes here.
+        yield index, visible_content(''.join(text))
+
+
 class SessionProgress:
     """A transient bottom loading line, committed dialogue lines, and plain pipe output."""
     def __init__(self, console: Console | None = None, *, is_tty=True):
@@ -113,6 +157,7 @@ class SessionProgress:
         self.slots = {}
         self.shown = set()
         self.in_model = False
+        self.reasoning_chars = 0
         self.spinner = Spinner('dots')
         self.active_key = None
         self.live = Live(console=self.console, get_renderable=self._render,
@@ -206,15 +251,22 @@ class SessionProgress:
             self.slots = {}
             self.active_key = None
             self.in_model = True
+            self.reasoning_chars = 0
             self.label, self.started = '等待模型', monotonic()
         elif kind == 'delta':
             delta = event['delta']
             if delta.kind == 'content':
+                self.label = '模型回复中'
                 key = ('content', 0)
                 slot = self.slots.setdefault(key, {'raw': '', 'shown': ''})
                 slot['raw'] += delta.content
                 self._preview(key, visible_content(slot['raw']))
+                for index, text in xml_dialogue(slot['raw']):
+                    xml_key = ('xml', index)
+                    self.slots.setdefault(xml_key, {'shown': ''})
+                    self._preview(xml_key, text)
             elif delta.kind == 'tool':
+                self.label = '模型回复中'
                 key = ('tool', delta.index)
                 slot = self.slots.setdefault(key, {'raw': '', 'name': '', 'shown': ''})
                 slot['name'] += delta.name
@@ -222,7 +274,11 @@ class SessionProgress:
                 field = {'finish_task': 'answer', 'ask_user': 'question'}.get(slot['name'])
                 if field:
                     self._preview(key, control_text(slot['raw'], field))
-            self.label = '模型回复中'
+            elif delta.kind == 'reasoning':
+                self.reasoning_chars += len(delta.content)
+                self.label = f'模型思考中 · 已接收 {self.reasoning_chars} 字符'
+            elif delta.kind == 'chunk' and self.label == '等待模型':
+                self.label = '模型响应已连接'
         elif kind == 'model_end':
             self._end_model(event.get('success', False))
         elif kind == 'tool_start':

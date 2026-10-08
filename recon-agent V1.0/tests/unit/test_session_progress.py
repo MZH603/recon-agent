@@ -57,6 +57,51 @@ def test_split_xml_reasoning_and_terminal_controls_are_hidden():
     assert all(s not in value for s in ('SECRET', 'PRIVATE', 'tool_call', '\x1b', '\x00', '\u202e'))
 
 
+@pytest.mark.parametrize('name,field', [('finish_task', 'answer'), ('ask_user', 'question')])
+def test_xml_dialogue_is_visible_before_control_call_is_complete(name, field):
+    progress, out = renderer()
+    with progress:
+        progress({'kind': 'model_start'})
+        for piece in ['<tool_', 'call><tool_name>', name,
+                      '</tool_name><parameters><' + field + '>首段中文😀']:
+            progress({'kind': 'delta', 'delta': StreamEvent('content', content=piece)})
+        assert '首段中文😀' in out.getvalue(), 'XML dialogue must appear before the final chunk'
+        for piece in ['后段 &am', 'p; 文本</' + field + '><evidence>SECRET</evidence>',
+                      '</parameters></tool_call>']:
+            progress({'kind': 'delta', 'delta': StreamEvent('content', content=piece)})
+        progress({'kind': 'model_end', 'success': True})
+    assert progress.was_shown('首段中文😀后段 & 文本')
+    assert 'SECRET' not in out.getvalue() and 'tool_call' not in out.getvalue()
+
+
+def test_xml_preview_keeps_non_dialogue_and_nested_fields_hidden():
+    from cli.progress import xml_dialogue
+    raw = ('<tool_call><tool_name>scan</tool_name><parameters><answer>SECRET</answer></parameters></tool_call>'
+           '<tool_call><tool_name>ask_user</tool_name><parameters><other><question>SECRET</question></other>'
+           '<question>Visible<think>PRIVATE</think> &amp; &#x1f600;</question>'
+           '<options>SECRET</options></parameters></tool_call>')
+    assert list(xml_dialogue(raw)) == [(0, ''), (1, 'Visible & 😀')]
+
+
+def test_xml_preview_survives_every_character_boundary():
+    from cli.progress import xml_dialogue
+    raw = '<tool_call><tool_name>ask_user</tool_name><parameters><question>你好 &amp; &#x1f600;</question></parameters></tool_call>'
+    previous = ''
+    for position in range(len(raw) + 1):
+        values = list(xml_dialogue(raw[:position]))
+        current = values[0][1] if values else ''
+        assert current.startswith(previous)
+        previous = current
+    assert previous == '你好 & 😀'
+
+
+@pytest.mark.parametrize('closing', ['', '</think>'])
+def test_xml_calls_inside_reasoning_are_not_previewed(closing):
+    from cli.progress import xml_dialogue
+    raw = '<think><tool_call><tool_name>ask_user</tool_name><parameters><question>PRIVATE</question></parameters></tool_call>' + closing
+    assert list(xml_dialogue(raw)) == []
+
+
 @pytest.mark.parametrize('text',[
     '条件：status < 500，继续。',
     '代码：`if count < limit: retry()`，然后继续。',

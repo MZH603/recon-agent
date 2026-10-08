@@ -13,6 +13,24 @@ def sdk_response(cost=None):
               _hidden_params={'response_cost': cost})
 
 
+def test_sdk_provider_help_is_quiet_but_unknown_cost_and_errors_remain(monkeypatch, capsys):
+    from model.litellm_adapter import _import_litellm
+    import litellm
+    monkeypatch.setattr(litellm, 'suppress_debug_info', False)
+    sdk = _import_litellm()
+    unknown = '__recon_unregistered_endpoint_model__'
+    raw = sdk.ModelResponse(model=unknown, usage={'prompt_tokens': 3, 'completion_tokens': 4,
+        'total_tokens': 7}, choices=[{'index': 0, 'finish_reason': 'stop',
+        'message': {'role': 'assistant', 'content': 'successful reply'}}])
+    response = LiteLLMAdapter('openai/' + unknown)._to_response(raw, sdk)
+    assert response.content == 'successful reply'
+    assert response.token_usage['cost'] is None and not response.token_usage['cost_known']
+    with pytest.raises(sdk.exceptions.BadRequestError):
+        sdk.get_llm_provider(model=unknown)
+    captured = capsys.readouterr()
+    assert 'Provider List:' not in captured.out + captured.err
+
+
 @pytest.mark.parametrize('cost', [0, 0.125])
 def test_adapter_captures_known_cost_and_custom_credential(monkeypatch, cost):
     captured=[]

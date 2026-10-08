@@ -26,6 +26,9 @@ def _import_litellm() -> Any:
     """惰性导入 litellm：离线/未安装时其余功能照常运行（分层降级）。"""
     try:
         import litellm
+        # SDK provider/pricing probes print help directly; our CLI owns diagnostics.
+        # This silences SDK help without changing exceptions or pricing results.
+        litellm.suppress_debug_info = True
         return litellm
     except ImportError as exc:
         raise ModelUnavailable("litellm 未安装（pip install litellm），无法调用模型") from exc
@@ -114,7 +117,7 @@ class LiteLLMAdapter(LLMProvider):
             kwargs.update(tools=tools, tool_choice='auto')
         for attempt in range(self.max_retries + 1):
             stream, started, terminated = None, False, False
-            content, calls, usage, model = [], {}, None, self.model
+            content, reasoning, calls, usage, model = [], [], {}, None, self.model
             try:
                 async def consume():
                     nonlocal stream, started, terminated, usage, model
@@ -138,6 +141,10 @@ class LiteLLMAdapter(LLMProvider):
                                     raise PartialStreamError('模型流未完整结束')
                                 terminated = True
                             delta = _field(choice, 'delta')
+                            thought = _field(delta, 'reasoning_content')
+                            if isinstance(thought, str) and thought:
+                                reasoning.append(thought)
+                                observe(on_delta, StreamEvent('reasoning', content=thought))
                             text = _field(delta, 'content')
                             if isinstance(text, str) and text:
                                 content.append(text)
@@ -159,14 +166,15 @@ class LiteLLMAdapter(LLMProvider):
                         name=value['name'], arguments=value['arguments'])) for _, value in sorted(calls.items())]
                     text = ''.join(content)
                     raw = SimpleNamespace(model=model, usage=usage, choices=[SimpleNamespace(
-                        message=SimpleNamespace(content=text, tool_calls=raw_calls))])
+                        message=SimpleNamespace(content=text, reasoning_content=''.join(reasoning), tool_calls=raw_calls))])
                     if usage is not None and hasattr(sdk, 'ModelResponse'):
                         raw = sdk.ModelResponse(model=model, usage={
                             'prompt_tokens': usage.prompt_tokens or 0,
                             'completion_tokens': usage.completion_tokens or 0,
                             'total_tokens': (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)},
                             choices=[{'index': 0, 'finish_reason': 'tool_calls' if calls else 'stop',
-                                      'message': {'role': 'assistant', 'content': text, 'tool_calls': [
+                                      'message': {'role': 'assistant', 'content': text,
+                                          'reasoning_content': ''.join(reasoning), 'tool_calls': [
                                           {'id': value['id'] or f'call-{index}', 'type': 'function',
                                            'function': {'name': value['name'], 'arguments': value['arguments']}}
                                           for index, value in sorted(calls.items())]}}])
@@ -175,7 +183,7 @@ class LiteLLMAdapter(LLMProvider):
                         response.token_usage = {
                             'input': conservative_tokens(json.dumps(messages, ensure_ascii=False) +
                                 (json.dumps(tools, ensure_ascii=False) if tools else ''), self.count_tokens),
-                            'output': conservative_tokens(text + ''.join(v['arguments'] for v in calls.values()), self.count_tokens),
+                            'output': conservative_tokens(''.join(reasoning) + text + ''.join(v['arguments'] for v in calls.values()), self.count_tokens),
                             'cost': None, 'cost_known': False, 'estimated': True}
                     return response
                 return await asyncio.wait_for(consume(), timeout=self.timeout)
@@ -207,6 +215,7 @@ class LiteLLMAdapter(LLMProvider):
         cost = response_cost(resp, sdk)
         return LLMResponse(
             content=message.content or "",
+            reasoning_content=getattr(message, 'reasoning_content', None) or '',
             tool_calls=self._normalize_tool_calls(getattr(message, "tool_calls", None)),
             token_usage={
                 "input": getattr(usage, "prompt_tokens", 0) or 0,

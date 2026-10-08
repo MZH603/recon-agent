@@ -87,6 +87,18 @@ def test_old_provider_default_stream_is_backward_compatible():
     assert events[0].content == 'legacy'
 
 
+def test_reasoning_stream_is_observed_preserved_and_counted(monkeypatch):
+    value = chunk()
+    value.choices[0].delta.reasoning_content = '内部推理'
+    events = []
+    stream = Stream([value, chunk('answer'), terminal()])
+    sdk(monkeypatch, [stream])
+    result = asyncio.run(LiteLLMAdapter('fixture').complete_stream([], on_delta=events.append))
+    assert any(event.kind == 'reasoning' and event.content == '内部推理' for event in events)
+    assert result.reasoning_content == '内部推理'
+    assert result.token_usage['output'] >= len('内部推理answer'.encode())
+
+
 def test_partial_failure_never_retries_or_falls_back_and_error_is_safe(monkeypatch):
     stream = Stream([chunk('visible'), OSError('SECRET https://private.invalid')])
     requests = sdk(monkeypatch, [stream, Stream([chunk('wrong')])])

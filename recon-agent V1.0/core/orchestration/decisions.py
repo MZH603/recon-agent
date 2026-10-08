@@ -65,6 +65,8 @@ class DecisionNodes:
         calls = response.tool_calls or parse_xml_tool_calls(response.content)
         native = bool(response.tool_calls)
         message = {'role': 'assistant', 'content': response.content}
+        if response.reasoning_content:
+            message['reasoning_content'] = response.reasoning_content
         if native:
             message['tool_calls'] = [{'id': c.id, 'type': 'function', 'function':
                 {'name': c.name, 'arguments': json.dumps(c.arguments, ensure_ascii=False)}} for c in calls]

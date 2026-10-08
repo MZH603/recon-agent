@@ -16,6 +16,126 @@ def test_pi_bridge_is_available():
     assert importlib.util.find_spec('cli.pi_bridge'), 'authenticated Pi bridge is missing'
 
 
+@pytest.mark.parametrize('protocol', ['content', 'native', 'xml'])
+def test_real_openai_sse_reaches_pi_before_server_finishes(tmp_path, monkeypatch, protocol):
+    """Actual LiteLLM HTTP decoding, graph and IPC, with the server held mid-response."""
+    from cli.pi_bridge import PiBridge
+    from cli.pi_session import serve_runtime
+    from core.llm import LLMService
+    from efficiency.budget_guard import BudgetGuard
+    from model.litellm_adapter import LiteLLMAdapter
+    from tests.unit.test_session_graph import fixture
+    monkeypatch.setenv('LITELLM_LOCAL_MODEL_COST_MAP', 'True')
+
+    async def scenario():
+        release = asyncio.Event()
+        release_reasoning = asyncio.Event()
+        requests, errors = [], []
+        first, second = '首段中文😀', '后段增量'
+
+        async def handle(reader, writer):
+            try:
+                headers = await reader.readuntil(b'\r\n\r\n')
+                size = int(next(line.split(b':', 1)[1] for line in headers.split(b'\r\n')
+                                if line.lower().startswith(b'content-length:')))
+                requests.append(json.loads(await reader.readexactly(size)))
+                writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n')
+
+                async def send(delta, finish=None):
+                    value = {'id': 'local', 'object': 'chat.completion.chunk', 'created': 1,
+                             'model': 'deepseek-flash', 'choices': [
+                                 {'index': 0, 'delta': delta, 'finish_reason': finish}]}
+                    if finish:
+                        value['usage'] = {'prompt_tokens': 10, 'completion_tokens': 20, 'total_tokens': 30}
+                    writer.write(('data: ' + json.dumps(value, ensure_ascii=False) + '\n\n').encode())
+                    await writer.drain()
+
+                await send({'reasoning_content': 'PRIVATE_INTERNAL_REASONING'})
+                await release_reasoning.wait()
+                if protocol == 'native':
+                    await send({'tool_calls': [{'index': 0, 'id': 'call-local', 'type': 'function',
+                        'function': {'name': 'ask_user', 'arguments': '{"question":"' + first}}]})
+                elif protocol == 'xml':
+                    await send({'content': '<tool_call><tool_name>ask_user</tool_name><parameters><question>' + first})
+                else:
+                    await send({'content': first})
+                await release.wait()  # Cannot complete until Pi has received the first text.
+                if protocol == 'native':
+                    await send({'tool_calls': [{'index': 0, 'function': {'arguments': second + '"}'}}]})
+                elif protocol == 'xml':
+                    await send({'content': second + '</question></parameters></tool_call>'})
+                else:
+                    await send({'content': second})
+                await send({}, 'tool_calls' if protocol == 'native' else 'stop')
+                writer.write(b'data: [DONE]\n\n')
+                await writer.drain()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(handle, '127.0.0.1', 0)
+        port = server.sockets[0].getsockname()[1]
+        llm = LLMService.__new__(LLMService)
+        llm.guard = BudgetGuard()
+        llm.provider = LiteLLMAdapter('openai/deepseek-flash',
+            api_base=f'http://127.0.0.1:{port}/v1', api_key='local-fixture', max_retries=0, timeout=20)
+        runtime, tool, gate = fixture(tmp_path, llm)
+        task, writer = None, None
+        try:
+            async with runtime, PiBridge() as bridge:
+                reader, writer = await asyncio.open_connection('127.0.0.1', bridge.port)
+                writer.write((json.dumps({'type': 'hello', 'token': bridge.token}) + '\n').encode())
+                await writer.drain()
+                await bridge.wait_connected()
+                task = asyncio.create_task(serve_runtime(runtime, gate, bridge))
+
+                async def until(predicate):
+                    while True:
+                        event = json.loads(await asyncio.wait_for(reader.readline(), 15))
+                        assert 'PRIVATE_INTERNAL_REASONING' not in json.dumps(event)
+                        if predicate(event):
+                            return event
+
+                await until(lambda event: event['type'] == 'state')
+                writer.write(b'{"type":"input","text":"inspect"}\n')
+                await writer.drain()
+                thinking = await until(lambda event: event['type'] == 'activity' and '思考中' in event['text'])
+                assert 'PRIVATE' not in thinking['text'] and not release_reasoning.is_set()
+                release_reasoning.set()
+                preview = await until(lambda event: event['type'] == 'preview')
+                assert preview['text'] == first
+                assert not release.is_set() and not task.done() and tool.calls == 0
+                assert requests[0]['stream'] is True
+                release.set()
+                await until(lambda event: event['type'] == 'preview' and event['text'] == first + second)
+                final = await until(lambda event: event['type'] == 'state')
+                assert final['status'] == 'paused'
+                assert (await runtime.state())['messages'][-1]['reasoning_content'] == 'PRIVATE_INTERNAL_REASONING'
+                writer.write(b'{"type":"input","text":"continue"}\n')
+                await writer.drain()
+                await until(lambda event: event['type'] == 'state')
+                previous = [message for message in requests[1]['messages'] if message['role'] == 'assistant']
+                assert previous[-1]['reasoning_content'] == 'PRIVATE_INTERNAL_REASONING'
+                writer.write(b'{"type":"quit"}\n')
+                await writer.drain()
+                assert await asyncio.wait_for(task, 3) == 0
+                assert errors == [] and tool.calls == 0
+        finally:
+            release_reasoning.set()
+            release.set()
+            if task and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if writer:
+                writer.close()
+                await writer.wait_closed()
+            server.close()
+            await server.wait_closed()
+    asyncio.run(scenario())
+
+
 def test_loopback_auth_split_unicode_and_command_boundary():
     from cli.pi_bridge import PiBridge, ProtocolError, child_environment
     async def scenario():
@@ -217,7 +337,8 @@ def test_log_capture_restores_cached_console_and_streams(capsys):
     assert '日志消息' not in capsys.readouterr().out
 
 
-def test_real_node_frontend_disconnection_cancels_graph_and_preserves_usage(tmp_path):
+@pytest.mark.parametrize('protocol', ['content', 'xml'])
+def test_real_node_frontend_disconnection_cancels_graph_and_preserves_usage(tmp_path, protocol):
     from cli.pi_bridge import PiBridge,PI_DIR,child_environment
     from cli.pi_session import serve_runtime
     from tests.unit.test_session_graph import fixture,ScriptedLLM
@@ -226,7 +347,8 @@ def test_real_node_frontend_disconnection_cancels_graph_and_preserves_usage(tmp_
         cancelled=asyncio.Event()
         class Waiting(ScriptedLLM):
             async def complete_stream(self,messages,tools,on_delta):
-                on_delta(StreamEvent(kind='content',content='首段中文😀'))
+                prefix = '<tool_call><tool_name>ask_user</tool_name><parameters><question>' if protocol == 'xml' else ''
+                on_delta(StreamEvent(kind='content',content=prefix+'首段中文😀'))
                 await asyncio.sleep(.15)
                 on_delta(StreamEvent(kind='content',content='后段增量'))
                 try:await asyncio.Event().wait()
@@ -241,7 +363,7 @@ def test_real_node_frontend_disconnection_cancels_graph_and_preserves_usage(tmp_
                 stdout,stderr=await asyncio.wait_for(child.communicate(),5)
                 assert child.returncode==0,stderr.decode()
                 evidence=json.loads(stdout)
-                assert evidence['incremental'] and evidence['loader'] and evidence['restored']
+                assert evidence['firstRendered'] and evidence['incremental'] and evidence['loader'] and evidence['restored']
                 assert await asyncio.wait_for(task,3)==2
                 assert cancelled.is_set() and tool.calls==0
             finally:

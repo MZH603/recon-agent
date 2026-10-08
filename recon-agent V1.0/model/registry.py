@@ -81,7 +81,7 @@ class FallbackProvider(LLMProvider):
             started = False
             def forward(event):
                 nonlocal started
-                started |= event.kind in ('chunk', 'content', 'tool', 'usage')
+                started |= event.kind in ('chunk', 'content', 'tool', 'usage', 'reasoning')
                 observe(on_delta, event)
             try:
                 return await provider.complete_stream(messages, tools, forward)
