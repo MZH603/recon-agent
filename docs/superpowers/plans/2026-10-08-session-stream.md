@@ -21,9 +21,9 @@ Files under recon-agent V1.0: model/base.py, model/litellm_adapter.py, model/reg
 ## Task 2: Independent review and final verification
 
 - [x] Independent spec then code quality review; resolve material findings with regressions.
-- [ ] Integrate into original main and run final offline regression and installed console idle smoke.
-- [ ] Capture a deterministic slow local fixture in a forced-terminal console or PTY, checking loading frames, incremental reply before final completion, tool progress, clean prompt and no duplicate text. No real API requests/scans.
-- [ ] Record evidence, clean the fully integrated worktree, and report unchanged startup command and user-visible behavior.
+- [x] Integrate into original main and run final offline regression and installed console idle smoke.
+- [x] Capture a deterministic slow local fixture in a forced-terminal console or PTY, checking loading frames, incremental reply before final completion, tool progress, clean prompt and no duplicate text. No real API requests/scans.
+- [x] Record evidence, clean the fully integrated worktree, and report unchanged startup command and user-visible behavior.
 
 ## Verification record
 
@@ -31,3 +31,5 @@ Files under recon-agent V1.0: model/base.py, model/litellm_adapter.py, model/reg
 
 - Implementation bec997c: focused 84 passed; full offline 264 passed, 1 deselected. Independent review: spec PASS, quality PASS; reviewer focused 41 passed.
 - Integration, installed smoke, and cleanup are carried into session-pi.md because the user selected Pi as the default frontend before integration.
+
+- Final integration evidence: reports/2026-10-08-session-pi-final-verification.md; original main 309 Python / 6 Node passed; real Windows ConPTY and installed entry verified.

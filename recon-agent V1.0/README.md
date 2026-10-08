@@ -110,7 +110,7 @@ recon-agent --session -t example.com --authorized -o reports --output-format jso
 ## 架构与阶段边界
 
 ```text
-CLI --session → 空闲 REPL → SessionRuntime (core/orchestration/)
+CLI --session → Pi TUI / Rich → Python SessionRuntime (core/orchestration/)
   decide → validate → authorize [interrupt] → execute → evaluate
   ask_user/update_plan/finish_task · bounded decisions/actions/steps
   SQLite checkpoints + independently committed usage/execution journal
@@ -121,7 +121,7 @@ MCP → existing external-agent tool bridge (L2 prohibited)
 
 模型提出工具与计划；代码决定是否允许执行。原始工具输出是非可信数据；成功工具来源才能支持完成任务，无证据解释标 `[无证据]`。模型失败、Schema 重试耗尽、预算耗尽及矛盾都可暂停。执行已开始但没有完成日志时，恢复必须显式选择 retry/skip；L2 重试也重新逐项确认。
 
-本阶段只替换交互会话编排、持久化与报告适配，保留默认/级联/MCP 路径。Skill、RAG、工具组合与 MCP 标准升级属于后续阶段。旧 `core/agent.py` 保留用于兼容，不再是 `--session` 主循环。
+本阶段替换交互会话编排、持久化、报告适配与终端界面，保留默认/级联/MCP 路径。Skill、RAG、工具组合与 MCP 标准升级属于后续阶段。旧 `core/agent.py` 保留用于兼容，不再是 `--session` 主循环。
 
 ## 离线验证
 
