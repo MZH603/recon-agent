@@ -85,9 +85,11 @@ def build_provider(settings: Settings | None = None, override: str | None = None
 
     providers: list[LLMProvider] = []
     names: list[str] = []
-    for spec in chain:
+    for index, spec in enumerate(chain):
         if not spec.api_key and spec.api_key_env and not os.environ.get(spec.api_key_env, "").strip():
-            warn(f"跳过模型 {spec.model}：环境变量 {spec.api_key_env} 未设置且未配置 api_key")
+            role = "主模型" if index == 0 else "备用模型"
+            note = "；不影响主模型连接配置" if index else ""
+            warn(f"跳过{role} {spec.model}：环境变量 {spec.api_key_env} 未设置且未配置 api_key{note}")
             continue
         providers.append(LiteLLMAdapter(
             model=spec.model,

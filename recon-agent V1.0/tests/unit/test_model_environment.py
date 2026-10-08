@@ -142,3 +142,23 @@ def test_environment_secret_is_masked_and_settings_are_unchanged(monkeypatch):
     for value in (spec, settings):
         for output in (repr(value), str(value.model_dump()), value.model_dump_json()):
             assert 'fixture-environment-key' not in output
+
+
+def test_missing_fallback_key_does_not_mean_primary_environment_failed(monkeypatch, sdk_calls):
+    monkeypatch.setenv('RECON_MODEL', 'openai/deepseek-flash')
+    monkeypatch.setenv('RECON_API_BASE', 'https://api.deepseek.com/v1')
+    monkeypatch.setenv('RECON_API_KEY', 'fixture-primary-key')
+    monkeypatch.delenv('DEEPSEEK_API_KEY', raising=False)
+    notices = []
+    monkeypatch.setattr('model.registry.warn', notices.append)
+    settings = Settings(model={'api_key_env': 'OPENAI_API_KEY',
+                               'fallback': ['deepseek-chat'], 'custom_endpoints': [
+        {'name': 'deepseek', 'model': 'deepseek-chat',
+         'base_url': 'https://api.deepseek.com/v1', 'api_key_env': 'DEEPSEEK_API_KEY'}]})
+    invoke(build_provider(settings))
+    assert sdk_calls[0]['model'] == 'openai/deepseek-flash'
+    assert sdk_calls[0]['api_key'] == 'fixture-primary-key'
+    assert len(notices) == 1
+    assert '备用模型 deepseek-chat' in notices[0]
+    assert '不影响主模型连接配置' in notices[0]
+    assert 'fixture-primary-key' not in notices[0]

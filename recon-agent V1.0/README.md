@@ -37,6 +37,13 @@ $env:RECON_API_KEY="你的 Key"
 它们不覆盖 `fallback` 的模型、地址或 Key。变量未设置或全为空白时保留原配置；模型名和地址去除两端空白，Key 保留原内容。
 修改环境变量后退出并重新启动会话（可用会话 ID 恢复）。
 
+DeepSeek 的 OpenAI 兼容连接示例：`RECON_MODEL=openai/deepseek-flash`、
+`RECON_API_BASE=https://api.deepseek.com/v1`，Key 使用 `RECON_API_KEY`。
+`openai/` 指定请求协议，发送给服务器的模型名仍是 `deepseek-flash`。
+裸模型名可能无法被 LiteLLM 识别。出现“跳过备用模型 deepseek-chat”表示 YAML 的
+fallback 缺少自己的 `DEEPSEEK_API_KEY`；不表示主模型的 `RECON_API_KEY` 缺失。
+主模型可继续使用自己的连接；备用模型仍需独立配置。
+
 也可直接在 `config.yaml` 中填写连接。例如 OpenAI 兼容的自定义端点：
 
 ```yaml
