@@ -34,7 +34,7 @@ Files: replace `cli/session.py`; modify `cli/main.py`; create `output/session_re
 
 - [x] Run `python -m pytest --ignore=tests/unit/test_nmap_fallback.py -k 'not golden_08' -q` with isolated APPDATA/no bytecode. These two legacy tests access external targets; all new tests use offline fixtures.
 - [x] CLI --help and pipe commands to ensure wait/no scan and report. Real SQLite fresh-process resume smoke with local fake tools. Build/install package and smoke outside source tree so required resource packaging is checked.
-- [ ] Independent spec review then quality review of runtime, CLI/report and final integration; fix material findings with regression tests and rerun affected suites. Mark task checkboxes, record actual validation and limitations. Return implemented branch and usage; integrate changes into original workspace once verified, without external publication.
+- [x] Independent spec review then quality review of runtime, CLI/report and final integration; fix material findings with regression tests and rerun affected suites. Mark task checkboxes, record actual validation and limitations. Return implemented branch and usage; integrate changes into original workspace once verified, without external publication.
 
 ## Execution record
 
@@ -43,6 +43,4 @@ Files: replace `cli/session.py`; modify `cli/main.py`; create `output/session_re
 - Runtime commit `46da4ff`: 35 runtime behavior tests plus 12 legacy gate/full-scan tests passed (47 total). Spec review passed after correcting native multi-call message order, XML list parameters, durable error history and invalid uncertainty replies. Quality review passed after OS session ownership and bounded total-work accounting were added in `1880425`. Independent focused suite: 55 passed; full offline regression: 176 passed, 1 deselected. An additional 125-control-call SQLite probe preserved 126 native tool replies across bounded resumes.
 
 
-- CLI/report/cost commit `344d829`: 202 passed, 1 deselected offline; independent spec review passed (26 focused tests and full regression). Installed wheel passed idle/report/resume/resource checks outside the source tree and five-process authorization/uncertainty recovery. Code quality review passed after correcting mixed DNS answer classification in `d57aac6`; report regression 8 passed, full offline 204 passed, 1 deselected. Final interaction audit passed. The final wheel was rebuilt and passed all package/CLI checks. Original workspace integration remains to be performed.
-
-
+- CLI/report/cost commit `344d829`: 202 passed, 1 deselected offline; independent spec review passed (26 focused tests and full regression). Installed wheel passed idle/report/resume/resource checks outside the source tree and five-process authorization/uncertainty recovery. Code quality review passed after correcting mixed DNS answer classification in `d57aac6`; report regression 8 passed, full offline 204 passed, 1 deselected. Final interaction audit passed. The final wheel was rebuilt and passed all package/CLI checks. Fast-forwarded into original main, installed editable project into root .venv, and verified the installed console entry. Original-workspace regression: 204 passed, 1 deselected in 23.12s; idle report and fresh console resume passed with zero decisions/actions.
