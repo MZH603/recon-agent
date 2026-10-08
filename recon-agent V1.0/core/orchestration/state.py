@@ -23,6 +23,7 @@ class SessionState(TypedDict, total=False):
     actions: int
     used_tokens: int
     used_cost: float
+    cost_unknown_calls: int
     schema_attempts: int
     route: str
     auth_mode: str
@@ -39,5 +40,5 @@ def initial_state(session_id: str, target: str, system_prompt: str) -> SessionSt
                         session_id=session_id, target=target,
                         messages=[{'role': 'system', 'content': system_prompt}] if system_prompt else [],
                         plan='', deferred_user=[], queued_calls=[], results=[], answer='', status='idle', pending=None,
-                        decisions=0, actions=0, used_tokens=0, used_cost=0.0,
+                        decisions=0, actions=0, used_tokens=0, used_cost=0.0, cost_unknown_calls=0,
                         schema_attempts=0, conflicts=[], events=[], executions=[], route='end')

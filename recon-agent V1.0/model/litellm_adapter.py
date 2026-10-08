@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+from model.cost import response_cost
 from typing import Any
 
 from model.base import (
@@ -56,6 +58,11 @@ class LiteLLMAdapter(LLMProvider):
             "timeout": self.timeout,
             "num_retries": 0,  # 重试由本层显式控制（指数退避）
         }
+        if self.api_key_env:
+            api_key = os.environ.get(self.api_key_env)
+            if not api_key:
+                raise ModelUnavailable("配置的 API Key 环境变量未设置")
+            kwargs["api_key"] = api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
         if tools:
@@ -65,7 +72,7 @@ class LiteLLMAdapter(LLMProvider):
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await litellm.acompletion(**kwargs)
-                return self._to_response(resp)
+                return self._to_response(resp, litellm)
             except ModelUnavailable:
                 raise
             except Exception as exc:  # noqa: BLE001 —— 统一收敛为 ModelUnavailable
@@ -73,19 +80,21 @@ class LiteLLMAdapter(LLMProvider):
                 if attempt < self.max_retries:
                     await asyncio.sleep(2 ** attempt)
         raise ModelUnavailable(
-            f"模型 {self.model} 不可达（重试 {self.max_retries} 次后放弃）: {last_error}"
+            f"模型 {self.model} 不可达（重试 {self.max_retries} 次后放弃）: {type(last_error).__name__}"
         )
 
-    def _to_response(self, resp: Any) -> LLMResponse:
+    def _to_response(self, resp: Any, sdk: Any = None) -> LLMResponse:
         """把 litellm 响应收敛为 LLMResponse（各模型差异在此抹平）。"""
         message = resp.choices[0].message
         usage = getattr(resp, "usage", None)
+        cost = response_cost(resp, sdk)
         return LLMResponse(
             content=message.content or "",
             tool_calls=self._normalize_tool_calls(getattr(message, "tool_calls", None)),
             token_usage={
                 "input": getattr(usage, "prompt_tokens", 0) or 0,
                 "output": getattr(usage, "completion_tokens", 0) or 0,
+                "cost": cost, "cost_known": cost is not None,
             },
             model=getattr(resp, "model", "") or self.model,
         )

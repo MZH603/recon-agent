@@ -33,15 +33,22 @@ class SessionStore:
                 ON session_execution(session_id, signature);
             CREATE TABLE IF NOT EXISTS session_usage (
                 session_id TEXT PRIMARY KEY, decisions INTEGER NOT NULL DEFAULT 0,
-                used_tokens INTEGER NOT NULL DEFAULT 0, used_cost REAL NOT NULL DEFAULT 0);
+                used_tokens INTEGER NOT NULL DEFAULT 0, used_cost REAL NOT NULL DEFAULT 0,
+                cost_unknown_calls INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS session_event (
                 session_id TEXT NOT NULL, event_id TEXT NOT NULL, timestamp TEXT NOT NULL,
                 payload TEXT NOT NULL, PRIMARY KEY(session_id,event_id));
         ''')
+        # Different sessions share this database; serialize legacy schema migration.
+        await self.connection.execute('BEGIN IMMEDIATE')
         async with self.connection.execute('PRAGMA table_info(session_execution)') as cursor:
             columns = [row[1] for row in await cursor.fetchall()]
         if 'task_id' not in columns:
             await self.connection.execute("ALTER TABLE session_execution ADD COLUMN task_id TEXT NOT NULL DEFAULT ''")
+        async with self.connection.execute("PRAGMA table_info(session_usage)") as cursor:
+            usage_columns = [row[1] for row in await cursor.fetchall()]
+        if "cost_unknown_calls" not in usage_columns:
+            await self.connection.execute("ALTER TABLE session_usage ADD COLUMN cost_unknown_calls INTEGER NOT NULL DEFAULT 0")
         await self.connection.commit()
         return self
 
@@ -87,17 +94,17 @@ class SessionStore:
 
     async def usage(self, session_id: str) -> dict:
         async with self.connection.execute(
-            'SELECT decisions,used_tokens,used_cost FROM session_usage WHERE session_id=?',
+            'SELECT decisions,used_tokens,used_cost,cost_unknown_calls FROM session_usage WHERE session_id=?',
             (session_id,)) as cursor:
             row = await cursor.fetchone()
-        return dict(zip(('decisions', 'used_tokens', 'used_cost'), row or (0, 0, 0.0)))
+        return dict(zip(('decisions', 'used_tokens', 'used_cost', 'cost_unknown_calls'), row or (0, 0, 0.0, 0)))
 
-    async def save_usage(self, session_id: str, decisions: int, used_tokens: int, used_cost: float):
+    async def save_usage(self, session_id: str, decisions: int, used_tokens: int, used_cost: float, cost_unknown_calls: int = 0):
         await self.connection.execute(
-            'INSERT INTO session_usage VALUES (?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET '
+            'INSERT INTO session_usage (session_id,decisions,used_tokens,used_cost,cost_unknown_calls) VALUES (?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET '
             'decisions=MAX(decisions,excluded.decisions), used_tokens=MAX(used_tokens,excluded.used_tokens), '
-            'used_cost=MAX(used_cost,excluded.used_cost)',
-            (session_id, decisions, used_tokens, used_cost))
+            'used_cost=MAX(used_cost,excluded.used_cost), cost_unknown_calls=MAX(cost_unknown_calls,excluded.cost_unknown_calls)',
+            (session_id, decisions, used_tokens, used_cost, cost_unknown_calls))
         await self.connection.commit()
 
     async def record_event(self, session_id: str, pending: dict):

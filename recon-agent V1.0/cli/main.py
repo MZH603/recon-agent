@@ -2,7 +2,7 @@
 
 三种运行模式：
 - 默认流水线：L0 确定性被动采集，无模型依赖；
-- --session：LLM 驱动 ReAct 会话（模型不可达自动降级离线）；
+- --session：LangGraph 持久交互会话（模型不可达暂停，可报告与恢复）；
 - --mcp：MCP stdio 服务器，供 Claude/ZCode 等第三方 AI Agent 自主接入。
 """
 from __future__ import annotations
@@ -22,7 +22,7 @@ console = Console()
 BANNER = (
     "[bold cyan]recon-agent[/bold cyan] [bold]V1.0[/bold] — 信息搜集 AI Agent\n"
     "[yellow]合规声明：仅用于已获合法授权的安全测试。隐蔽性与目标可用性第一，"
-    "默认 L0 纯被动，绝不触碰目标。[/yellow]"
+    "默认 L0 受控采集，部分指纹与 SAN 查询会接触远端。[/yellow]"
 )
 
 PROFILE_LEVELS = {"passive": 0, "stealth": 1, "aggressive": 2}
@@ -58,10 +58,11 @@ def run(
     batch: bool = typer.Option(False, "--batch", help="非交互模式（HARD：永久禁止 L2）"),
     lab: bool = typer.Option(False, "--lab", help="实验环境模式：解锁内网/环回目标（仅限自有/自建环境）"),
     session: bool = typer.Option(False, "--session", help="会话模式（REPL，可逐步升级 L1/L2）"),
+    resume: str = typer.Option(None, "--resume", help="恢复已有会话 ID（必须配合 --session）"),
     mcp_mode: bool = typer.Option(False, "--mcp", help="MCP stdio 服务器模式（供第三方 Agent 接入）"),
     authorized_for: str = typer.Option(None, "--authorized-for", help="MCP 模式授权范围（逗号分隔域名，HARD 必填）"),
     allow_l1: bool = typer.Option(False, "--allow-l1", help="MCP 模式放行 L1（HARD：L2 在 MCP 下永久禁止）"),
-    output_format: str = typer.Option("markdown", "--output-format", help="markdown|json|csv"),
+    output_format: str = typer.Option("markdown", "--output-format", "--format", help="markdown|json|csv"),
     max_tokens: int = typer.Option(None, "--max-tokens", help="任务 token 预算"),
     max_cost: float = typer.Option(None, "--max-cost", help="任务成本预算（USD）"),
     output: str = typer.Option(None, "-o", "--output", help="输出文件前缀目录"),
@@ -75,6 +76,9 @@ def run(
                                  help="打印版本号"),
 ) -> None:
     """对授权目标执行信息搜集，或以 MCP 服务器模式供 Agent 接入。"""
+    if (resume and not session) or (mcp_mode and (session or resume)):
+        err("--resume 必须配合 --session；会话与 --mcp 不兼容")
+        raise typer.Exit(2)
     if not mcp_mode:
         console.print(BANNER)
     settings = _settings_with(max_tokens, max_cost)
@@ -108,7 +112,7 @@ def run(
                 target=target, settings=settings, batch=batch, is_tty=is_tty,
                 requested_level=requested, model_override=model,
                 output_format=output_format, output_dir=output,
-                run_pipeline=pipeline.run_pipeline,
+                run_pipeline=pipeline.run_pipeline, resume_id=resume,
             )
         if requested >= 1 and not batch:
             # 级联策略（HARD：门控语义不变）：请求高级别时自动执行全部低等级扫描

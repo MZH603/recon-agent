@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from langgraph.types import interrupt
 from core.orchestration.controls import CONTROLS, control_specs
 from efficiency.budget_guard import BudgetExhausted
+from model.cost import valid_cost
 from model.base import ModelUnavailable, parse_xml_tool_calls
 from tools.base import ToolResult
 
@@ -15,6 +16,7 @@ class DecisionNodes:
     async def _decide(self, state):
         usage = await self.store.usage(self.session_id)
         decisions = max(state['decisions'], usage['decisions'])
+        unknown_costs = max(state.get("cost_unknown_calls", 0), usage["cost_unknown_calls"])
         if decisions - state.get('segment_decisions', 0) >= self.max_decisions:
             return self._pause_update('limit', 'Decision limit reached. Continue grants one more bounded segment; budget remains cumulative.', options=['Continue', 'Stop'])
         try:
@@ -23,7 +25,7 @@ class DecisionNodes:
             return self._pause_update('budget', str(exc), options=['Stop'])
         # Commit the decision reservation before any model call, so crashes cannot reset limits.
         decisions += 1
-        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost)
+        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs)
         before_tokens, before_cost = self.guard.used_tokens, self.guard.used_cost
         try:
             response = await self.llm.complete(state['messages'], self.registry.specs() + control_specs())
@@ -33,8 +35,10 @@ class DecisionNodes:
         # Injected providers may not own a BudgetGuard. Avoid double-registering LLMService.
         tokens = response.token_usage.get('input', 0) + response.token_usage.get('output', 0)
         self.guard.used_tokens = max(self.guard.used_tokens, before_tokens + tokens)
-        self.guard.used_cost = max(self.guard.used_cost, before_cost + float(response.token_usage.get('cost', 0) or 0))
-        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost)
+        cost = valid_cost(response.token_usage.get('cost'))
+        unknown_costs += int(cost is None)
+        self.guard.used_cost = max(self.guard.used_cost, before_cost + (cost or 0.0))
+        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs)
         calls = response.tool_calls or parse_xml_tool_calls(response.content)
         native = bool(response.tool_calls)
         message = {'role': 'assistant', 'content': response.content}
@@ -42,7 +46,7 @@ class DecisionNodes:
             message['tool_calls'] = [{'id': c.id, 'type': 'function', 'function':
                 {'name': c.name, 'arguments': json.dumps(c.arguments, ensure_ascii=False)}} for c in calls]
         update = {'decisions': decisions, 'used_tokens': self.guard.used_tokens,
-                  'used_cost': self.guard.used_cost, 'messages': state['messages'] + [message]}
+                  'used_cost': self.guard.used_cost, 'cost_unknown_calls': unknown_costs, 'messages': state['messages'] + [message]}
         if not calls:
             return {**update, **self._pause_update('clarification',
                 'The model supplied text without explicit completion. What should happen next?',

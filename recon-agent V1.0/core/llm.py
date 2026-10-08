@@ -1,6 +1,7 @@
 """LLM 服务桥接（模型 fallback + 预算联动；HARD：EXHAUSTED 时拒绝一切模型调用）。"""
 from __future__ import annotations
 
+from model.cost import valid_cost
 from efficiency.budget_guard import BudgetGuard
 from model.base import LLMProvider, LLMResponse
 from model.registry import build_provider
@@ -25,7 +26,8 @@ class LLMService:
         """预算检查 → 模型调用 → 消耗登记（ModelUnavailable 向上传播交由降级处理）。"""
         self.guard.check()  # HARD: EXHAUSTED 抛 BudgetExhausted
         resp = await self.provider.complete(messages, tools)
-        self.guard.register(resp.token_usage.get("input", 0), resp.token_usage.get("output", 0))
+        self.guard.register(resp.token_usage.get("input", 0), resp.token_usage.get("output", 0),
+                            valid_cost(resp.token_usage.get("cost")) or 0.0)
         return resp
 
     def count_tokens(self, text: str) -> int:
