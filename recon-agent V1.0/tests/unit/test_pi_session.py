@@ -193,7 +193,7 @@ def test_active_cancel_disconnect_usage_and_ownership(tmp_path,ending):
                 if ending in ('stop','abort'):
                     while json.loads(await reader.readline())['type']!='state':pass
                     writer.write(b'{"type":"quit"}\n');await writer.drain()
-            assert await asyncio.wait_for(task,3)==(130 if ending=='cancel' else 0)
+            assert await asyncio.wait_for(task,3)==(130 if ending=='cancel' else 2 if ending=='disconnect' else 0)
             assert cancelled.is_set() and tool.calls==0
             assert (await runtime.state())['used_tokens']>=12
             writer.close()
@@ -242,7 +242,7 @@ def test_real_node_frontend_disconnection_cancels_graph_and_preserves_usage(tmp_
                 assert child.returncode==0,stderr.decode()
                 evidence=json.loads(stdout)
                 assert evidence['incremental'] and evidence['loader'] and evidence['restored']
-                assert await asyncio.wait_for(task,3)==0
+                assert await asyncio.wait_for(task,3)==2
                 assert cancelled.is_set() and tool.calls==0
             finally:
                 if child.returncode is None:child.kill();await child.wait()
@@ -342,7 +342,7 @@ def test_slow_ui_queue_is_bounded_and_cancels_active_graph(tmp_path):
             writer.write(b'{"type":"input","text":"inspect"}\n');await writer.drain();await started.wait()
             for _ in range(1000):bridge.emit({'type':'note','text':'slow '*1000})
             assert bridge.queue.qsize()<=128 and bridge.disconnected.is_set()
-            await asyncio.wait_for(task,3)
+            assert await asyncio.wait_for(task,3)==2
             assert cancelled.is_set() and tool.calls==0 and (await runtime.state())['used_tokens']>=5
             writer.close()
     asyncio.run(scenario())
@@ -369,3 +369,107 @@ def test_authenticated_bridge_refuses_a_second_frontend_and_releases_port():
         server=await asyncio.start_server(lambda r,w:w.close(),'127.0.0.1',port)
         server.close();await server.wait_closed()
     asyncio.run(scenario())
+
+
+def test_protocol_error_returns_failure_after_graph_cleanup(tmp_path):
+    from cli.pi_bridge import PiBridge
+    from cli.pi_session import serve_runtime
+    from tests.unit.test_session_graph import fixture,ScriptedLLM
+    async def scenario():
+        runtime,_,gate=fixture(tmp_path,ScriptedLLM())
+        async with runtime,PiBridge() as bridge:
+            _,writer=await asyncio.open_connection('127.0.0.1',bridge.port)
+            writer.write(json.dumps({'type':'hello','token':bridge.token}).encode()+b'\n');await writer.drain();await bridge.wait_connected()
+            task=asyncio.create_task(serve_runtime(runtime,gate,bridge))
+            writer.write(b'{broken}\n');await writer.drain()
+            assert await asyncio.wait_for(task,3)==2
+            writer.close()
+    asyncio.run(scenario())
+
+
+def test_hung_child_gets_force_killed_after_graceful_deadline():
+    from cli import pi_session
+    assert hasattr(pi_session,'close_child'),'bounded forcible cleanup helper missing'
+    async def scenario():
+        class Hung:
+            returncode=None
+            def __init__(self):self.done=asyncio.Event();self.killed=False
+            async def wait(self):await self.done.wait();return self.returncode
+            def terminate(self):raise AssertionError('catchable terminate is insufficient')
+            def kill(self):self.killed=True;self.returncode=-9;self.done.set()
+        child=Hung()
+        await asyncio.wait_for(pi_session.close_child(child,timeout=.01),1)
+        assert child.killed and child.returncode==-9
+    asyncio.run(scenario())
+
+
+def test_runner_reports_disconnect_only_after_child_and_log_capture_restore(tmp_path,monkeypatch):
+    from cli.pi_session import run_pi_session
+    from utils.config import Settings
+    import sys
+    original_out=sys.stdout;notices=[]
+    monkeypatch.setattr('platforms.paths.get_config_dir',lambda:tmp_path)
+    monkeypatch.setattr('cli.pi_session.pi_available',lambda:(True,''))
+    async def scenario():
+        class Child:
+            returncode=None
+            def __init__(self):self.done=asyncio.Event()
+            async def wait(self):await self.done.wait();return self.returncode
+            def kill(self):self.returncode=-9;self.done.set()
+        child=Child()
+        async def spawn(*args,env):
+            async def frontend():
+                reader,writer=await asyncio.open_connection('127.0.0.1',int(env['RECON_PI_PORT']))
+                writer.write(json.dumps({'type':'hello','token':env['RECON_PI_TOKEN']}).encode()+b'\n');await writer.drain()
+                while json.loads(await reader.readline())['type']!='state':pass
+                writer.write(b'{broken}\n');await writer.drain()
+                await reader.read();writer.close();await writer.wait_closed()
+                child.returncode=1;child.done.set()
+            child.frontend=asyncio.create_task(frontend())
+            return child
+        monkeypatch.setattr('cli.pi_session.asyncio.create_subprocess_exec',spawn)
+        def warn(message):
+            assert child.returncode is not None and sys.stdout is original_out
+            notices.append(message)
+        monkeypatch.setattr('utils.logger.warn',warn)
+        def forbidden(*args):raise AssertionError('idle constructed model')
+        result=await run_pi_session('example.com',Settings(),False,True,0,None,'json',str(tmp_path),
+            session_id='frontend-failed',llm_factory=forbidden)
+        assert result==2
+        await child.frontend
+    asyncio.run(scenario())
+    assert len(notices)==1 and '--resume frontend-failed' in notices[0]
+
+
+def test_saved_plan_is_visible_on_initial_state_and_status_without_model_calls(tmp_path):
+    from cli.pi_bridge import PiBridge
+    from cli.pi_session import serve_runtime
+    from tests.unit.test_session_graph import fixture,ScriptedLLM
+    async def scenario():
+        llm=ScriptedLLM();runtime,tool,gate=fixture(tmp_path,llm)
+        async with runtime,PiBridge() as bridge:
+            await runtime.graph.aupdate_state(runtime.config,{'plan':'先查询 DNS，再总结来源。'})
+            reader,writer=await asyncio.open_connection('127.0.0.1',bridge.port)
+            writer.write(json.dumps({'type':'hello','token':bridge.token}).encode()+b'\n');await writer.drain();await bridge.wait_connected()
+            task=asyncio.create_task(serve_runtime(runtime,gate,bridge))
+            initial=json.loads(await reader.readline())
+            assert initial['plan']=='先查询 DNS，再总结来源。'
+            writer.write(b'{"type":"status"}\n');await writer.drain()
+            status=json.loads(await reader.readline())
+            assert status['plan']==initial['plan'] and llm.calls==tool.calls==0
+            writer.write(b'{"type":"quit"}\n');await writer.drain();assert await task==0;writer.close()
+    asyncio.run(scenario())
+
+
+def test_long_unicode_saved_plan_has_explicit_label_and_bounded_full_segments():
+    from cli.pi_session import PiProgress,display_state
+    from gate.scan_gate import ScanGate
+    class Sink:
+        def __init__(self):self.events=[]
+        def emit(self,event):self.events.append(event)
+    sink=Sink();progress=PiProgress(sink);plan='中文😀计划 '*5000+'计划尾部'
+    state=display_state({'plan':plan},ScanGate('example.com'),progress)
+    assert len(json.dumps(state,ensure_ascii=False).encode())<65536
+    assert any(e['type']=='note' and '计划' in e['text'] for e in sink.events)
+    assert ''.join(e['text'] for e in sink.events if e['type']=='preview')==plan
+    assert all(len(json.dumps(e,ensure_ascii=False).encode())<65536 for e in sink.events)

@@ -57,6 +57,35 @@ def test_split_xml_reasoning_and_terminal_controls_are_hidden():
     assert all(s not in value for s in ('SECRET', 'PRIVATE', 'tool_call', '\x1b', '\x00', '\u202e'))
 
 
+@pytest.mark.parametrize('text',[
+    '条件：status < 500，继续。',
+    '代码：`if count < limit: retry()`，然后继续。',
+    '多个比较：x < 2 且 y < 4，完成。',
+])
+def test_ordinary_less_than_comparisons_and_code_preserve_text(text):
+    from cli.progress import visible_content
+    assert visible_content(text)==text
+
+
+def test_less_than_chunk_releases_once_reserved_tag_is_impossible():
+    progress,out=renderer()
+    with progress:
+        progress({'kind':'model_start'})
+        progress({'kind':'delta','delta':StreamEvent('content',content='条件：status <')})
+        progress({'kind':'delta','delta':StreamEvent('content',content=' 500，继续。')})
+        assert '条件：status < 500，继续。' in out.getvalue()
+        progress({'kind':'delta','delta':StreamEvent('content',content='<thi')})
+        assert '<thi' not in out.getvalue()
+        progress({'kind':'delta','delta':StreamEvent('content',content='nk>PRIVATE</think>结束。')})
+        progress({'kind':'model_end','success':True})
+    assert 'PRIVATE' not in out.getvalue() and '结束。' in out.getvalue()
+
+
+def test_ordinary_comparison_before_reserved_tag_does_not_leak_reasoning():
+    from cli.progress import visible_content
+    assert visible_content('status < 500<think>PRIVATE</think>继续。')=='status < 500继续。'
+
+
 def test_tty_live_spinner_elapsed_and_interrupt_cleanup():
     progress, out=renderer(True)
     with progress:

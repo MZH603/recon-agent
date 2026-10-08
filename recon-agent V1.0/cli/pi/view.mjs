@@ -24,9 +24,10 @@ export function createView(terminal, send, onExit=()=>{}) {
  }
  function idle(){view.busy=false;if(view.loader){view.loader.stop();bottom.removeChild(view.loader);view.loader=null;}}
  editor.onSubmit=text=>{
+  const draft=text;
   text=text.trim();if(!text)return;
   const command=['status','状态','report','报告','生成报告','stop','abort','quit','exit','退出'].includes(text.toLowerCase());
-  if(view.busy&&!command){state.setText('任务运行中；可输入 stop、abort 或 quit');tui.requestRender();return;}
+  if(view.busy&&!command){editor.setText(draft);state.setText('任务运行中；可输入 stop、abort 或 quit');tui.requestRender();return;}
   editor.addToHistory(text);editor.setText('');note(style('recon> '+text,{bold:true,fg:cyan}));
   if(!command)loading('等待模型…');
   send({type:'input',text});tui.requestRender();
@@ -48,6 +49,7 @@ export function createView(terminal, send, onExit=()=>{}) {
    case 'note':note(event.text);break;
    case 'state':
     if(event.busy)loading('任务执行中…');else idle();state.setText(`状态: ${event.status} · L${event.level} · tokens ${event.used_tokens??0}`);
+    if(event.plan)markdown('计划: '+event.plan);
     markdown(event.answer);
     if(event.pending){note(`等待回复 [${event.pending.kind}]`);markdown(event.pending.question);note((event.pending.options??[]).join(' / '));}
     break;

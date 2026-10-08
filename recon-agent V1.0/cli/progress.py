@@ -25,6 +25,8 @@ def safe_text(text: str) -> str:
 def visible_content(raw: str) -> str:
     """Withhold tag prefixes, tool protocol blocks and tagged reasoning across chunks."""
     visible, position, hidden = [], 0, None
+    reserved = ('tool_call', 'tool_calls', 'think', 'thinking', 'analysis', 'reasoning')
+    reserved_tags = reserved + tuple('/' + tag for tag in reserved)
     while position < len(raw):
         if hidden:
             close = re.search(r'</\s*' + re.escape(hidden) + r'\s*>', raw[position:], re.I)
@@ -38,13 +40,25 @@ def visible_content(raw: str) -> str:
             visible.append(raw[position:])
             break
         visible.append(raw[position:opening])
+        prefix = re.match(r'\s*(/?)([a-z_]*)', raw[opening + 1:], re.I)
+        candidate = ''.join(prefix.groups()).lower()
+        remainder = raw[opening + 1 + prefix.end():]
+        possible = ((not remainder and any(tag.startswith(candidate) for tag in reserved_tags)) or
+                    (candidate in reserved_tags and
+                     (not remainder or remainder[0].isspace() or remainder[0] == '>')))
+        if not possible:
+            # Ordinary comparisons/code may contain another reserved tag later.
+            # Release only this '<' and keep scanning, rather than swallowing to '>'.
+            visible.append('<')
+            position = opening + 1
+            continue
         end = raw.find('>', opening)
         if end < 0:
             break
         tag = raw[opening + 1:end].strip().lower().split()[0] if raw[opening + 1:end].strip() else ''
-        if tag in ('tool_call', 'tool_calls', 'think', 'thinking', 'analysis', 'reasoning'):
+        if tag in reserved:
             hidden = tag
-        elif tag not in ('/tool_call', '/tool_calls', '/think', '/thinking', '/analysis', '/reasoning'):
+        elif tag not in reserved_tags:
             visible.append(raw[opening:end + 1])
         position = end + 1
     return safe_text(''.join(visible))

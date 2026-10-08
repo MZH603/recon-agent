@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import hashlib
 from pathlib import Path
 import shutil
 import sys
@@ -22,6 +23,7 @@ class PiProgress(SessionProgress):
     def __init__(self, bridge):
         super().__init__(is_tty=False)
         self.bridge, self.turn = bridge, 0
+        self.plan_shown = None
 
     def _flush_line(self):
         self.line = ''
@@ -90,6 +92,14 @@ def display_state(state, gate, progress):
     result = {'type': 'state', 'status': safe_text(state.get('status', 'idle')),
               'level': gate.current_level(), 'decisions': state.get('decisions', 0),
               'actions': state.get('actions', 0), 'used_tokens': state.get('used_tokens', 0)}
+    if state.get('plan'):
+        plan = visible_content(str(state['plan']))
+        if len(plan.encode('utf-8')) <= 2000:
+            result['plan'] = plan
+        elif progress.plan_shown != plan:
+            progress._note('计划（模型建议，未验证）:')
+            progress.publish('saved-plan:' + hashlib.sha256(plan.encode('utf-8')).hexdigest(), plan)
+            progress.plan_shown = plan
     pending = state.get('pending')
     if pending:
         question = visible_content(str(pending.get('question', '')))
@@ -155,6 +165,7 @@ async def serve_runtime(runtime, gate, bridge, report=None):
             receive = asyncio.create_task(bridge.receive())
             done, _ = await asyncio.wait({receive, lost}, return_when=asyncio.FIRST_COMPLETED)
             if lost in done:
+                exit_code = 2
                 break
             command = receive.result()
             kind = command['type']
@@ -191,7 +202,7 @@ async def serve_runtime(runtime, gate, bridge, report=None):
                     bridge.emit({'type': 'activity', 'text': '等待模型'})
                     active = asyncio.create_task(execute(text))
     except (EOFError, ConnectionError):
-        pass
+        exit_code = 2
     finally:
         if receive and not receive.done():
             receive.cancel()
@@ -209,13 +220,24 @@ async def serve_runtime(runtime, gate, bridge, report=None):
     return exit_code
 
 
+async def close_child(child, timeout=3):
+    """Allow normal terminal restoration first, then force-kill a hung frontend."""
+    if child.returncode is None:
+        try:
+            await asyncio.wait_for(child.wait(), timeout)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                child.kill()  # SIGTERM handlers may keep a POSIX Node process alive.
+            await child.wait()
+
+
 async def run_pi_session(target, settings, batch, is_tty, requested_level, model_override,
                          output_format, output_dir, run_pipeline=None, *, resume_id=None,
                          session_id=None, llm_factory=None):
     from platforms.paths import get_config_dir
     from tools.registry import build_default
     from output.session_report import save_session_report
-    from utils.logger import err, ok
+    from utils.logger import err, ok, warn
     available, reason = pi_available()
     if not available or not is_tty or batch:
         err('Pi 界面不可用: ' + (reason or '需要交互终端'))
@@ -231,6 +253,7 @@ async def run_pi_session(target, settings, batch, is_tty, requested_level, model
         db_path=get_config_dir() / 'agent_state.sqlite', session_id=identifier,
         system_prompt=session_prompt(registry, target), require_existing=bool(resume_id))
     child = None
+    unexpected_disconnect = False
     try:
         async with runtime, PiBridge() as bridge:
             child = await asyncio.create_subprocess_exec(shutil.which('node'), str(PI_DIR / 'app.mjs'),
@@ -256,14 +279,15 @@ async def run_pi_session(target, settings, batch, is_tty, requested_level, model
                     shlex.quote(safe_text(identifier)) + ' -t ' + shlex.quote(safe_text(target)) + ' --authorized'})
                 bridge.emit({'type': 'note', 'text': '命令: status · report · stop · abort · quit；Shift+Enter 换行'})
                 result = await serve_runtime(runtime, gate, bridge, report)
+                unexpected_disconnect = result == 2
             return result
     except (ValueError, RuntimeError, OSError, asyncio.TimeoutError):
         err('Pi 会话无法打开，请检查本地 Node/Pi 安装与会话 ID。')
         return 2
     finally:
-        if child and child.returncode is None:
-            try:
-                await asyncio.wait_for(child.wait(), 3)  # socket close gives UI finally time to restore terminal
-            except asyncio.TimeoutError:
-                child.terminate()
-                await child.wait()
+        if child:
+            await close_child(child)
+        if unexpected_disconnect:
+            # Both capture_logs and the child terminal have closed before Python prints.
+            warn('Pi 界面意外断开，任务已取消并保留用量。恢复命令: recon-agent --session --resume ' +
+                 shlex.quote(safe_text(identifier)) + ' -t ' + shlex.quote(safe_text(target)) + ' --authorized')

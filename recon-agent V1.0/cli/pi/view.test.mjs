@@ -46,3 +46,20 @@ test('status while running retains loading and full long segmented Markdown',()=
  assert.ok(view.transcript.render(45).join('\n').includes('尾标记'));
  view.stop();
 });
+test('restored state and status display a saved plan',()=>{
+ const view=createView(new FakeTerminal(),()=>{});
+ view.handle({type:'state',status:'idle',level:0,plan:'先查询 DNS，再总结来源。'});
+ assert.ok(view.transcript.render(45).join('\n').includes('计划: 先查询 DNS，再总结来源。'));
+ view.stop();
+});
+test('actual Editor Enter preserves a rejected busy draft and still accepts status',()=>{
+ const sent=[],view=createView(new FakeTerminal(),command=>sent.push(command));
+ try {
+  view.editor.setText('first task');view.editor.handleInput('\r');
+  const draft='第二条任务\n保留多行草稿';
+  view.editor.setText(draft);view.editor.handleInput('\r');
+  assert.equal(sent.length,1);assert.equal(view.editor.getText(),draft);
+  view.editor.setText('status');view.editor.handleInput('\r');
+  assert.deepEqual(sent[1],{type:'input',text:'status'});assert.equal(view.editor.getText(),'');
+ } finally {view.stop();}
+});
