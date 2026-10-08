@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import inspect
+from types import SimpleNamespace
 from model.cost import response_cost
 from typing import Any
 
@@ -16,6 +18,7 @@ from model.base import (
     LLMResponse,
     ModelUnavailable,
     NormalizedToolCall,
+    StreamEvent, PartialStreamError, observe, conservative_tokens,
 )
 
 
@@ -92,6 +95,111 @@ class LiteLLMAdapter(LLMProvider):
             f"模型 {self.model} 不可达（重试 {self.max_retries} 次后放弃）: {type(last_error).__name__}"
         )
 
+    async def complete_stream(self, messages, tools=None, on_delta=None) -> LLMResponse:
+        """Consume SDK deltas under one timeout per attempt; never retry partial output."""
+        sdk = _import_litellm()
+        kwargs = dict(model=self.model, messages=messages, temperature=self.temperature,
+                      timeout=self.timeout, num_retries=0, stream=True,
+                      stream_options={'include_usage': True})
+        if self.api_key:
+            kwargs['api_key'] = self.api_key.get_secret_value()
+        elif self.api_key_env:
+            key = os.environ.get(self.api_key_env, '')
+            if not key.strip():
+                raise ModelUnavailable('配置的 API Key 环境变量未设置')
+            kwargs['api_key'] = key
+        if self.api_base:
+            kwargs['api_base'] = self.api_base
+        if tools:
+            kwargs.update(tools=tools, tool_choice='auto')
+        for attempt in range(self.max_retries + 1):
+            stream, started, terminated = None, False, False
+            content, calls, usage, model = [], {}, None, self.model
+            try:
+                async def consume():
+                    nonlocal stream, started, terminated, usage, model
+                    stream = await sdk.acompletion(**kwargs)
+                    async for chunk in stream:
+                        started = True
+                        model = _field(chunk, 'model') or model
+                        observe(on_delta, StreamEvent('chunk'))
+                        chunk_usage = _field(chunk, 'usage')
+                        if chunk_usage is not None:
+                            usage = SimpleNamespace(prompt_tokens=_field(chunk_usage, 'prompt_tokens', 0),
+                                                    completion_tokens=_field(chunk_usage, 'completion_tokens', 0))
+                            observe(on_delta, StreamEvent('usage', token_usage={
+                                'input': usage.prompt_tokens or 0, 'output': usage.completion_tokens or 0}))
+                        for choice in _field(chunk, 'choices', []) or []:
+                            if _field(choice, 'index', 0) != 0:
+                                continue
+                            reason = _field(choice, 'finish_reason')
+                            if reason is not None:
+                                if reason not in ('stop', 'tool_calls', 'function_call'):
+                                    raise PartialStreamError('模型流未完整结束')
+                                terminated = True
+                            delta = _field(choice, 'delta')
+                            text = _field(delta, 'content')
+                            if isinstance(text, str) and text:
+                                content.append(text)
+                                observe(on_delta, StreamEvent('content', content=text))
+                            for call in _field(delta, 'tool_calls', []) or []:
+                                index = _field(call, 'index', 0)
+                                entry = calls.setdefault(index, {'id': '', 'name': '', 'arguments': ''})
+                                entry['id'] += _field(call, 'id') or ''
+                                function = _field(call, 'function')
+                                name, args = _field(function, 'name') or '', _field(function, 'arguments') or ''
+                                entry['name'] += name
+                                entry['arguments'] += args
+                                observe(on_delta, StreamEvent('tool', index=index, name=name, arguments=args))
+                    if not started:
+                        raise ModelUnavailable('模型流未返回响应')
+                    if not terminated:
+                        raise PartialStreamError('模型流缺少结束标记，回复未完成')
+                    raw_calls = [SimpleNamespace(id=value['id'], function=SimpleNamespace(
+                        name=value['name'], arguments=value['arguments'])) for _, value in sorted(calls.items())]
+                    text = ''.join(content)
+                    raw = SimpleNamespace(model=model, usage=usage, choices=[SimpleNamespace(
+                        message=SimpleNamespace(content=text, tool_calls=raw_calls))])
+                    if usage is not None and hasattr(sdk, 'ModelResponse'):
+                        raw = sdk.ModelResponse(model=model, usage={
+                            'prompt_tokens': usage.prompt_tokens or 0,
+                            'completion_tokens': usage.completion_tokens or 0,
+                            'total_tokens': (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)},
+                            choices=[{'index': 0, 'finish_reason': 'tool_calls' if calls else 'stop',
+                                      'message': {'role': 'assistant', 'content': text, 'tool_calls': [
+                                          {'id': value['id'] or f'call-{index}', 'type': 'function',
+                                           'function': {'name': value['name'], 'arguments': value['arguments']}}
+                                          for index, value in sorted(calls.items())]}}])
+                    response = self._to_response(raw, sdk)
+                    if usage is None:
+                        response.token_usage = {
+                            'input': conservative_tokens(json.dumps(messages, ensure_ascii=False) +
+                                (json.dumps(tools, ensure_ascii=False) if tools else ''), self.count_tokens),
+                            'output': conservative_tokens(text + ''.join(v['arguments'] for v in calls.values()), self.count_tokens),
+                            'cost': None, 'cost_known': False, 'estimated': True}
+                    return response
+                return await asyncio.wait_for(consume(), timeout=self.timeout)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if started:
+                    raise PartialStreamError('模型回复中断，已显示内容未完成；请显式恢复会话') from None
+                if attempt >= self.max_retries:
+                    raise ModelUnavailable(f'模型流不可用（重试耗尽）: {type(exc).__name__}') from None
+            finally:
+                if stream is not None:
+                    close = getattr(stream, 'aclose', None) or getattr(stream, 'close', None)
+                    if close is not None:
+                        try:
+                            result = close()
+                            if inspect.isawaitable(result):
+                                await asyncio.wait_for(result, timeout=1)
+                        except Exception:
+                            pass  # Cleanup errors must not replace the response or safe failure.
+            observe(on_delta, StreamEvent('retry'))
+            await asyncio.sleep(2 ** attempt)
+        raise ModelUnavailable('模型流不可用')
+
     def _to_response(self, resp: Any, sdk: Any = None) -> LLMResponse:
         """把 litellm 响应收敛为 LLMResponse（各模型差异在此抹平）。"""
         message = resp.choices[0].message
@@ -132,3 +240,7 @@ class LiteLLMAdapter(LLMProvider):
     def count_tokens(self, text: str) -> int:
         """轻量粗估（len/4），避免额外依赖；预算控制精度足够。"""
         return max(1, len(text or "") // 4)
+
+
+def _field(value, name, default=None):
+    return value.get(name, default) if isinstance(value, dict) else getattr(value, name, default)

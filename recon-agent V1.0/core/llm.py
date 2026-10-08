@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from model.cost import valid_cost
 from efficiency.budget_guard import BudgetGuard
-from model.base import LLMProvider, LLMResponse
+from model.base import LLMProvider, LLMResponse, StreamUsage, observe
 from model.registry import build_provider
 from utils.config import Settings, get_settings
 
@@ -33,3 +33,21 @@ class LLMService:
     def count_tokens(self, text: str) -> int:
         """token 粗估透传。"""
         return self.provider.count_tokens(text)
+
+    async def complete_stream(self, messages, tools=None, on_delta=None) -> LLMResponse:
+        self.guard.check()
+        partial = StreamUsage()
+        finished = False
+        def forward(event):
+            partial.add(event)
+            observe(on_delta, event)
+        try:
+            response = await self.provider.complete_stream(messages, tools, forward)
+            self.guard.register(response.token_usage.get('input', 0), response.token_usage.get('output', 0),
+                                valid_cost(response.token_usage.get('cost')) or 0.0)
+            finished = True
+            return response
+        finally:
+            if partial.started and not finished:
+                usage = partial.partial(messages, self.count_tokens, tools)
+                self.guard.register(usage['input'], usage['output'])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from time import monotonic
 from langgraph.types import interrupt
 from hallucination.contradiction import ContradictionDetector
 from model.base import NormalizedToolCall
@@ -67,11 +68,16 @@ class ExecutionNodes:
             return 'yes'
 
         self.gate._prompt_fn = verified_step
+        started = monotonic()
+        result = None
         try:
+            self._emit('tool_start', name=call['name'])
             result = (await self.registry.execute(NormalizedToolCall(id=call['id'], name=call['name'], arguments=arguments))).model_dump(mode='json')
         finally:
             self.gate._prompt_fn = original_prompt
             self._permit = None
+            self._emit('tool_end', name=call['name'], success=bool(result and result['success']),
+                       elapsed=monotonic() - started)
         # Completed result is committed before graph checkpointing. A crash after this
         # commit reuses the complete payload instead of repeating the side effect.
         result = self._annotate(call, result)

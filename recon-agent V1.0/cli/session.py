@@ -9,7 +9,8 @@ from uuid import uuid4
 from core.orchestration import SessionRuntime
 from efficiency.budget_guard import BudgetGuard, BudgetExhausted
 from gate.scan_gate import ScanGate
-from model.base import ModelUnavailable
+from model.base import ModelUnavailable, response_events
+from cli.progress import SessionProgress, safe_text
 from utils.logger import info, ok, warn, err
 
 
@@ -38,6 +39,34 @@ class LazyLLM:
         except Exception as exc:
             raise ModelUnavailable('模型配置或响应不可用，请检查配置后恢复会话') from exc
 
+    async def complete_stream(self, messages, tools=None, on_delta=None):
+        # Construct lazily without a preliminary model request.
+        if self.service is None:
+            try:
+                if self.factory is None:
+                    from core.llm import LLMService
+                    self.service = LLMService(self.settings, self.model, guard=self.guard)
+                else:
+                    self.service = self.factory(self.settings, self.model)
+                    self.service.guard = self.guard
+            except Exception:
+                raise ModelUnavailable('模型配置不可用，请检查配置后恢复会话') from None
+        try:
+            stream = getattr(self.service, 'complete_stream', None)
+            if stream is not None:
+                return await stream(messages, tools, on_delta)
+            response = await self.service.complete(messages, tools)
+            response_events(response, on_delta)
+            return response
+        except (ModelUnavailable, BudgetExhausted):
+            raise
+        except Exception:
+            raise ModelUnavailable('模型配置或响应不可用，请检查配置后恢复会话') from None
+
+    def count_tokens(self, text):
+        method = getattr(self.service, 'count_tokens', None)
+        return method(text) if method else max(1, len(text) // 4)
+
 
 def session_prompt(registry, target):
     return f'''你是授权目标 {target} 的信息搜集助手。仅响应操作员任务，不自动扫描。
@@ -54,23 +83,34 @@ clarification_only=true，不能将模型文字当验证发现。遇错误请等
 '''
 
 
-def show_state(state, gate):
+def show_state(state, gate, progress=None):
     info(f"状态: {state.get('status')} · L{gate.current_level()} · 决策 {state.get('decisions', 0)} · "
          f"动作 {state.get('actions', 0)} · tokens {state.get('used_tokens', 0)}")
     if state.get('plan'):
-        info('计划: ' + escape(state['plan']))
+        info('计划: ' + escape(safe_text(state['plan'])))
     pending = state.get('pending')
     if pending:
         if pending.get('kind') == 'clarification':
             latest = next((m.get('content', '') for m in reversed(state.get('messages', []))
                            if m.get('role') == 'assistant'), '')
-            if latest:
-                info('模型回复（未验证）: ' + escape(latest))
-        warn(escape(f"等待回复 [{pending.get('kind')}]: {pending.get('question')}"))
+            if latest and not (progress and progress.was_shown(latest)):
+                from cli.progress import visible_content
+                info('模型回复（未验证）: ' + escape(visible_content(latest)))
+        question = str(pending.get('question') or '')
+        if progress and progress.was_shown(question):
+            warn(escape(f"等待回复 [{pending.get('kind')}]: 请回复上方问题"))
+        else:
+            warn(escape(safe_text(f"等待回复 [{pending.get('kind')}]: {question}")))
         if pending.get('options'):
-            info('选项: ' + escape(' / '.join(map(str, pending['options']))))
+            info('选项: ' + escape(safe_text(' / '.join(map(str, pending['options'])))))
     elif state.get('answer'):
-        ok('模型任务摘要（未验证分析）: ' + escape(state['answer']))
+        answer = state['answer']
+        suffix = ' [无证据]'
+        if progress and (progress.was_shown(answer) or
+                         (answer.endswith(suffix) and progress.was_shown(answer[:-len(suffix)]))):
+            ok('任务已结束' + (suffix if answer.endswith(suffix) else ''))
+        else:
+            ok('模型任务摘要（未验证分析）: ' + escape(safe_text(answer)))
 
 
 async def run_session(target, settings, batch, is_tty, requested_level, model_override,
@@ -123,9 +163,15 @@ async def run_session(target, settings, batch, is_tty, requested_level, model_ov
                     show_state(state, gate)
                 elif text:
                     try:
-                        state = (await runtime.resume(text) if (await runtime.state()).get('pending')
-                                 else await runtime.submit(text))
-                        show_state(state, gate)
+                        from utils.logger import console
+                        with SessionProgress(console=console(), is_tty=is_tty) as progress:
+                            runtime.on_event = progress
+                            try:
+                                state = (await runtime.resume(text) if (await runtime.state()).get('pending')
+                                         else await runtime.submit(text))
+                            finally:
+                                runtime.on_event = None
+                        show_state(state, gate, progress)
                     except (KeyboardInterrupt, asyncio.CancelledError, NodeCancelledError):
                         exit_code = 130
                         warn("会话已中断，未完成工作保留；恢复后需显式继续")

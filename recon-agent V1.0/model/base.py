@@ -2,15 +2,75 @@
 from __future__ import annotations
 
 import re
+import json
+from dataclasses import dataclass, field
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
 
 class ModelUnavailable(RuntimeError):
     """模型不可达 / 未配置 / 调用耗尽（上层捕获后降级到模板报告）。"""
+
+
+class PartialStreamError(ModelUnavailable):
+    """A response started; retrying or switching providers would mix responses."""
+
+
+@dataclass(frozen=True)
+class StreamEvent:
+    """Process-local observation, never a tool execution or persisted decision."""
+    kind: str
+    content: str = ''
+    index: int = 0
+    name: str = ''
+    arguments: str = ''
+    token_usage: dict = field(default_factory=dict)
+
+
+def observe(callback: Callable | None, event: Any) -> None:
+    """A broken display must not change execution; cancellation still propagates."""
+    if callback is not None:
+        try:
+            callback(event)
+        except Exception:
+            pass
+
+
+def response_events(response: 'LLMResponse', callback: Callable | None) -> None:
+    if response.content:
+        observe(callback, StreamEvent('content', content=response.content))
+    for index, call in enumerate(response.tool_calls):
+        observe(callback, StreamEvent('tool', index=index, name=call.name,
+                                     arguments=json.dumps(call.arguments, ensure_ascii=False)))
+
+
+class StreamUsage:
+    """Track partial consumption independently of display success or cancellation."""
+    def __init__(self):
+        self.started = False
+        self.output = ''
+        self.usage = {}
+
+    def add(self, event: StreamEvent):
+        if event.kind in ('chunk', 'content', 'tool', 'usage'):
+            self.started = True
+        self.output += event.content + event.arguments
+        if event.token_usage:
+            self.usage.update(event.token_usage)
+
+    def partial(self, messages, count_tokens, tools=None):
+        request = json.dumps(messages, ensure_ascii=False) + (json.dumps(tools, ensure_ascii=False) if tools else '')
+        return {'input': self.usage.get('input', conservative_tokens(request, count_tokens)),
+                'output': self.usage.get('output', conservative_tokens(self.output, count_tokens)),
+                'cost': None, 'cost_known': False}
+
+
+def conservative_tokens(text: str, count_tokens: Callable) -> int:
+    """Without usage, reserve at least one token per UTF-8 byte, including CJK text."""
+    return max(1, count_tokens(text), len(text.encode('utf-8')))
 
 
 class NormalizedToolCall(BaseModel):
@@ -36,6 +96,13 @@ class LLMProvider(ABC):
     @abstractmethod
     async def complete(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
         """发送对话，返回归一化响应。"""
+
+    async def complete_stream(self, messages: list[dict], tools: list[dict] | None = None,
+                              on_delta: Callable | None = None) -> LLMResponse:
+        """Compatible extension: providers implementing only complete remain valid."""
+        response = await self.complete(messages, tools)
+        response_events(response, on_delta)
+        return response
 
     @abstractmethod
     def count_tokens(self, text: str) -> int:

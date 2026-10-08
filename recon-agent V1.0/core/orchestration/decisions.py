@@ -8,7 +8,7 @@ from langgraph.types import interrupt
 from core.orchestration.controls import CONTROLS, control_specs
 from efficiency.budget_guard import BudgetExhausted
 from model.cost import valid_cost
-from model.base import ModelUnavailable, parse_xml_tool_calls
+from model.base import ModelUnavailable, parse_xml_tool_calls, StreamUsage, response_events
 from tools.base import ToolResult
 
 
@@ -27,18 +27,41 @@ class DecisionNodes:
         decisions += 1
         await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs)
         before_tokens, before_cost = self.guard.used_tokens, self.guard.used_cost
+        partial = StreamUsage()
+        response = None
+        tools = self.registry.specs() + control_specs()
+        def forward(delta):
+            partial.add(delta)
+            self._emit(delta.kind if delta.kind in ('retry', 'fallback') else 'delta', delta=delta)
         try:
-            response = await self.llm.complete(state['messages'], self.registry.specs() + control_specs())
+            self._emit('model_start')
+            if self.on_event is not None and hasattr(self.llm, 'complete_stream'):
+                response = await self.llm.complete_stream(state['messages'], tools, forward)
+            else:
+                response = await self.llm.complete(state['messages'], tools)
+                if self.on_event is not None:
+                    response_events(response, forward)
         except (ModelUnavailable, BudgetExhausted) as exc:
             kind = 'budget' if isinstance(exc, BudgetExhausted) else 'model_unavailable'
             return {'decisions': decisions, **self._pause_update(kind, f'{exc}. Choose whether to continue.', options=['Continue', 'Stop'])}
-        # Injected providers may not own a BudgetGuard. Avoid double-registering LLMService.
-        tokens = response.token_usage.get('input', 0) + response.token_usage.get('output', 0)
-        self.guard.used_tokens = max(self.guard.used_tokens, before_tokens + tokens)
-        cost = valid_cost(response.token_usage.get('cost'))
-        unknown_costs += int(cost is None)
-        self.guard.used_cost = max(self.guard.used_cost, before_cost + (cost or 0.0))
-        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs)
+        finally:
+            # Independent journal persistence is required even when the graph node is cancelled.
+            if response is not None:
+                # Register before end observers: they may propagate cancellation too.
+                tokens = response.token_usage.get('input', 0) + response.token_usage.get('output', 0)
+                self.guard.used_tokens = max(self.guard.used_tokens, before_tokens + tokens)
+                cost = valid_cost(response.token_usage.get('cost'))
+                unknown_costs += int(cost is None)
+                self.guard.used_cost = max(self.guard.used_cost, before_cost + (cost or 0.0))
+            elif partial.started:
+                count = getattr(self.llm, 'count_tokens', lambda text: max(1, len(text) // 4))
+                consumed = partial.partial(state['messages'], count, tools)
+                self.guard.used_tokens = max(self.guard.used_tokens,
+                    before_tokens + consumed['input'] + consumed['output'])
+                unknown_costs += 1
+            await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens,
+                                        self.guard.used_cost, unknown_costs)
+            self._emit('model_end', success=response is not None)
         calls = response.tool_calls or parse_xml_tool_calls(response.content)
         native = bool(response.tool_calls)
         message = {'role': 'assistant', 'content': response.content}
@@ -73,6 +96,7 @@ class DecisionNodes:
             result = ToolResult(name=call['name'], success=True, data=params.model_dump()).model_dump()
             update = self._consume(state, result, record=False)
             if call['name'] == 'update_plan':
+                self._emit('plan', text=params.plan)
                 return {**update, 'plan': params.plan, 'schema_attempts': 0,
                         'route': 'validate' if update['queued_calls'] else 'decide'}
             known = {e for r in state['results'] if r['success'] for e in r['evidence']}
@@ -100,6 +124,7 @@ class DecisionNodes:
 
     async def _pause(self, state):
         pending = state['pending']
+        self._emit('pause', pending=pending)
         await self.store.record_event(self.session_id, pending)
         value = interrupt(pending)
         if str(value).strip().lower() in ('stop', 'quit', 'exit', '退出', 'abort'):

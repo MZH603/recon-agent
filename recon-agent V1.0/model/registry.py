@@ -5,7 +5,7 @@ import os
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
-from model.base import LLMProvider, LLMResponse, ModelUnavailable
+from model.base import LLMProvider, LLMResponse, ModelUnavailable, PartialStreamError, StreamEvent, observe
 from model.litellm_adapter import LiteLLMAdapter
 from utils.config import Settings, get_settings, optional_api_key
 from utils.logger import warn
@@ -75,6 +75,22 @@ class FallbackProvider(LLMProvider):
 
     def count_tokens(self, text: str) -> int:
         return self._providers[0].count_tokens(text) if self._providers else max(1, len(text) // 4)
+
+    async def complete_stream(self, messages, tools=None, on_delta=None) -> LLMResponse:
+        for index, provider in enumerate(self._providers):
+            started = False
+            def forward(event):
+                nonlocal started
+                started |= event.kind in ('chunk', 'content', 'tool', 'usage')
+                observe(on_delta, event)
+            try:
+                return await provider.complete_stream(messages, tools, forward)
+            except ModelUnavailable:
+                if started:
+                    raise PartialStreamError('模型回复中断，请显式恢复会话') from None
+                if index + 1 < len(self._providers):
+                    observe(on_delta, StreamEvent('fallback', name=self._names[index + 1]))
+        raise ModelUnavailable('全部模型流不可用，请检查配置后恢复会话') from None
 
 
 def build_provider(settings: Settings | None = None, override: str | None = None) -> LLMProvider:

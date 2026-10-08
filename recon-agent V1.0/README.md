@@ -76,6 +76,10 @@ model:
 
 启动打印会话 ID 和恢复命令。在 `recon>` 输入中文或自然语言任务，例如“仅查询 example.com 的 A 记录，然后总结来源”。回复待确认问题时恢复当前节点。仅在显式任务之后才可能调用模型或工具。
 
+Python CLI 的 Rich 兼容界面支持真实流式回复：提交任务立即显示等待模型与耗时，逐段展示普通文本及 `finish_task.answer` / `ask_user.question`，执行已获授权工具时展示进度与结果。完整工具参数通过校验前不会执行；工具 JSON、XML 控制块、推理标签和终端控制字符不会直接出现在回复预览中。原生文本已预览时，结束状态或待回复提示不重复打印全文。输出重定向、非 TTY 或 dumb terminal 使用普通逐段文本，无动画或 ANSI 重绘。
+
+首块前的连接错误可以重试或切换备用模型；响应已经开始后断流会暂停，已显示片段标为未完成，需要显式继续。Ctrl+C 保留退出码 130 和恢复命令，关闭模型流并释放会话锁。完整调用只计量一次；断流或取消保存已知 token 或保守估算，未提供 usage 的成功流也估算 token，费用无法确定时计入未知调用。流式观察事件仅在当前进程内用于界面展示，不写入 checkpoint 或授予权限。
+
 ```powershell
 recon-agent --session --resume SESSION_ID -t example.com --authorized
 recon-agent --session -t example.com --authorized -o reports --output-format json

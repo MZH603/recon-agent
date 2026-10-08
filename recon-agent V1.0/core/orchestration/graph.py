@@ -21,6 +21,7 @@ from efficiency.budget_guard import BudgetGuard
 from gate.scan_gate import ScanGate
 from tools.registry import ToolRegistry
 from utils.config import Settings
+from model.base import observe
 
 
 class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupport):
@@ -33,7 +34,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
     def __init__(self, *, target: str, registry: ToolRegistry, llm, gate: ScanGate,
                  settings: Settings, db_path: str | Path, session_id: str,
                  system_prompt: str = '', max_decisions: int = 15, max_actions: int = 15,
-                 require_existing: bool = False, max_steps: int | None = None):
+                 require_existing: bool = False, max_steps: int | None = None, on_event=None):
         max_steps = max_decisions + max_actions if max_steps is None else max_steps
         if max_decisions < 1 or max_actions < 1 or max_steps < 1:
             raise ValueError('Task decision, action and step limits must be positive')
@@ -42,6 +43,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self.target, self.registry, self.llm, self.gate = target, registry, llm, gate
         self.settings, self.db_path, self.session_id = settings, Path(db_path).resolve(), session_id
         self.system_prompt = system_prompt
+        self.on_event = on_event
         self.require_existing = require_existing
         self.max_decisions, self.max_actions = max_decisions, max_actions
         self.max_steps = max_steps
@@ -55,6 +57,9 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self._stack = AsyncExitStack()
         self._lock = asyncio.Lock()
         self._permit = None  # one action, in this process only
+
+    def _emit(self, kind, **payload):
+        observe(self.on_event, {'kind': kind, **payload})
 
     async def __aenter__(self):
         if self._entered:
