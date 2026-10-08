@@ -22,7 +22,33 @@ recon-agent -t example.com --authorized --batch
 recon-agent --session -t example.com --authorized
 ```
 
-模型配置见 `config.yaml`：设置模型名、可选端点及 API Key 环境变量。PowerShell 示例 `$env:DEEPSEEK_API_KEY="你的Key"`；凭据只存环境变量。也可用 `--model` 覆盖模型。模型到第一条任务才初始化，配置或连接失败会暂停，允许报告、退出并恢复；会话不会自动运行默认流水线。
+模型连接可直接在 `config.yaml` 中填写 API 请求根地址和 Key。例如 OpenAI 兼容的自定义端点：
+
+```yaml
+model:
+  provider: litellm
+  name: openai/your-model
+  api_base: https://your-endpoint.example/v1
+  api_key: "填写你的 Key"
+  # api_key_env: CUSTOM_API_KEY  # 可选；api_key 为空时读取
+  fallback: []
+```
+
+`api_base` 填 API 根地址（一般以 `/v1` 结尾），不要填完整 `/chat/completions` 路径。
+`provider: litellm` 选择适配器；OpenAI 兼容端点的 `name` 使用 `openai/模型名` 选择协议。
+非空 `api_key` 优先于 `api_key_env`；空字符串或空白 Key 视为未填写。
+也可以设置 `api_key: ""`、`api_key_env: CUSTOM_API_KEY`，然后在 PowerShell 执行
+`$env:CUSTOM_API_KEY="你的 Key"`。指定环境变量但未设置、又没有直接 Key 时，该模型会报错或被 fallback 链跳过；
+两个凭据字段都不配置时，保留 LiteLLM 自己读取供应商环境变量的行为。
+
+`--model openai/another-model` 使用主连接的地址和凭据；`--model deepseek` 等命名端点命中
+`custom_endpoints` 的 `name` 或 `model` 时，只使用该端点自己的连接配置。
+旧端点字段 `base_url`、`api_key_env` 继续支持；端点也可填 `api_base`（优先于 `base_url`）和 `api_key`。
+`fallback` 每项使用匹配端点的独立连接，或供应商的默认连接与环境变量，不继承主模型地址和 Key。
+修改 YAML 或环境变量后退出并重新启动会话（可用会话 ID 恢复），让新进程重新加载配置。
+直接 Key 不写入配置对象的显示/导出、会话或报告；包含真实 Key 的 YAML 请保留在本机，不要提交到版本库。
+
+模型到第一条任务才初始化，配置或连接失败会暂停，允许报告、退出并恢复；会话不会自动运行默认流水线。
 
 ## 交互会话与恢复
 

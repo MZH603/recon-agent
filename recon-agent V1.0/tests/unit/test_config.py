@@ -20,7 +20,7 @@ def test_yaml_override(tmp_path):
     assert s.MAX_CONCURRENCY == 1  # 安全常量不受模型配置影响
 
 
-def test_api_key_only_from_env():
-    # HARD: key 只走环境变量；配置文件里不存在 key 字段
+def test_no_api_key_field_on_global_settings():
+    # 凭据属于嵌套模型配置，不是全局运行常量。
     fields = Settings.model_fields.keys()
     assert not any("key" in f.lower() for f in fields)

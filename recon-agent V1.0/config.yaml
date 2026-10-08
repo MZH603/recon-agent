@@ -2,6 +2,9 @@
 model:
   provider: litellm
   name: gpt-4o-mini
+  api_base: https://api.openai.com/v1  # API 根地址，不要填完整 /chat/completions 路径
+  api_key: ""                       # 可填写自己的 Key；非空时优先于 api_key_env
+  api_key_env: OPENAI_API_KEY        # api_key 为空时从此环境变量读取
   temperature: 0          # HARD: 结构化任务确定性
   max_retries: 2
   timeout: 120

@@ -7,6 +7,10 @@ import os
 from model.cost import response_cost
 from typing import Any
 
+from pydantic import SecretStr
+
+from utils.config import optional_api_key
+
 from model.base import (
     LLMProvider,
     LLMResponse,
@@ -40,10 +44,13 @@ class LiteLLMAdapter(LLMProvider):
         temperature: int = 0,
         max_retries: int = 2,
         timeout: int = 120,
+        *,
+        api_key: str | SecretStr | None = None,
     ) -> None:
         self.model = model
         self.api_base = api_base
         self.api_key_env = api_key_env
+        self.api_key = optional_api_key(api_key)
         self.temperature = temperature
         self.max_retries = max_retries
         self.timeout = timeout
@@ -58,9 +65,11 @@ class LiteLLMAdapter(LLMProvider):
             "timeout": self.timeout,
             "num_retries": 0,  # 重试由本层显式控制（指数退避）
         }
-        if self.api_key_env:
+        if self.api_key:
+            kwargs["api_key"] = self.api_key.get_secret_value()
+        elif self.api_key_env:
             api_key = os.environ.get(self.api_key_env)
-            if not api_key:
+            if not api_key or not api_key.strip():
                 raise ModelUnavailable("配置的 API Key 环境变量未设置")
             kwargs["api_key"] = api_key
         if self.api_base:
@@ -73,8 +82,8 @@ class LiteLLMAdapter(LLMProvider):
             try:
                 resp = await litellm.acompletion(**kwargs)
                 return self._to_response(resp, litellm)
-            except ModelUnavailable:
-                raise
+            except ModelUnavailable as exc:
+                raise ModelUnavailable(f"模型 {self.model} 不可达: {type(exc).__name__}") from None
             except Exception as exc:  # noqa: BLE001 —— 统一收敛为 ModelUnavailable
                 last_error = exc
                 if attempt < self.max_retries:
