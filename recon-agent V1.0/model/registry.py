@@ -93,10 +93,11 @@ class FallbackProvider(LLMProvider):
         raise ModelUnavailable('全部模型流不可用，请检查配置后恢复会话') from None
 
 
-def build_provider(settings: Settings | None = None, override: str | None = None) -> LLMProvider:
+def build_provider(settings: Settings | None = None, override: str | None = None, *,
+                   connection_override: ModelSpec | None = None) -> LLMProvider:
     """构建 fallback 链；显式指定的凭据缺失时跳过该模型并报备。"""
     settings = settings or get_settings()
-    chain = [resolve_model(settings, override)]
+    chain = [connection_override if connection_override is not None else resolve_model(settings, override)]
     chain += [resolve_model(settings, fb, inherit_primary=False) for fb in settings.model.fallback]
 
     providers: list[LLMProvider] = []

@@ -15,8 +15,9 @@ from utils.logger import info, ok, warn, err
 
 
 class LazyLLM:
-    def __init__(self, settings, model, factory=None):
+    def __init__(self, settings, model, factory=None, *, connection_override=None):
         self.settings, self.model, self.factory = settings, model, factory
+        self.connection_override = connection_override
         self.service = None
         self.guard = BudgetGuard(max_tokens=settings.MAX_TOKENS_PER_TASK,
                                  max_cost=settings.MAX_COST_PER_TASK)
@@ -26,7 +27,8 @@ class LazyLLM:
             try:
                 if self.factory is None:
                     from core.llm import LLMService
-                    self.service = LLMService(self.settings, self.model, guard=self.guard)
+                    kwargs = {} if self.connection_override is None else {'connection_override': self.connection_override}
+                    self.service = LLMService(self.settings, self.model, guard=self.guard, **kwargs)
                 else:
                     self.service = self.factory(self.settings, self.model)
                     self.service.guard = self.guard
@@ -45,7 +47,8 @@ class LazyLLM:
             try:
                 if self.factory is None:
                     from core.llm import LLMService
-                    self.service = LLMService(self.settings, self.model, guard=self.guard)
+                    kwargs = {} if self.connection_override is None else {'connection_override': self.connection_override}
+                    self.service = LLMService(self.settings, self.model, guard=self.guard, **kwargs)
                 else:
                     self.service = self.factory(self.settings, self.model)
                     self.service.guard = self.guard
@@ -115,7 +118,7 @@ def show_state(state, gate, progress=None):
 
 async def run_session(target, settings, batch, is_tty, requested_level, model_override,
                       output_format, output_dir, run_pipeline=None, *, resume_id=None,
-                      session_id=None, input_fn=None, llm_factory=None) -> int:
+                      session_id=None, input_fn=None, llm_factory=None, connection_override=None) -> int:
     from platforms.paths import get_config_dir
     from tools.registry import build_default
     from output.session_report import save_session_report
@@ -125,7 +128,7 @@ async def run_session(target, settings, batch, is_tty, requested_level, model_ov
     identifier = resume_id or session_id or uuid4().hex
     gate = ScanGate(target, batch_mode=batch, is_tty=is_tty, requested_level=0)
     registry = build_default(settings, gate, target)
-    llm = LazyLLM(settings, model_override, llm_factory)
+    llm = LazyLLM(settings, model_override, llm_factory, connection_override=connection_override)
     runtime = SessionRuntime(target=target, registry=registry, llm=llm, gate=gate,
         settings=settings, db_path=get_config_dir() / 'agent_state.sqlite', session_id=identifier,
         system_prompt=session_prompt(registry, target), require_existing=bool(resume_id))

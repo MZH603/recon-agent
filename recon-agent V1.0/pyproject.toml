@@ -36,4 +36,4 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 tools = ["data/*.txt"]
-cli = ["pi/app.mjs", "pi/view.mjs", "pi/bridge.mjs", "pi/package.json", "pi/package-lock.json"]
+cli = ["pi/app.mjs", "pi/view.mjs", "pi/bridge.mjs", "pi/setup.mjs", "pi/setup-app.mjs", "pi/package.json", "pi/package-lock.json"]

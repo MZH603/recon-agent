@@ -13,12 +13,19 @@ Python ≥ 3.10。核心依赖由 `pyproject.toml` 安装，包括 LiteLLM、Lan
 交互会话默认使用 Pi 主屏终端界面（`@earendil-works/pi-tui` 精确版本 1.0.4），需要 Node.js ≥22.19.0。
 在项目目录执行 `npm ci --ignore-scripts --prefix cli/pi`；wheel 安装后可用
 `python -c "from cli.pi_bridge import PI_DIR; print(PI_DIR)"` 找到该目录，再切换到该目录执行 `npm ci --ignore-scripts`。
-依赖只安装在本机该目录，不自动联网安装。模型、LangGraph、门控和 SQLite 仍由 Python 后端负责；Node 界面不接收模型凭据。
+依赖只安装在本机该目录，不自动联网安装。模型、LangGraph、门控和 SQLite 仍由 Python 后端负责；已有 Key 只留在 Python，配置页中新输入的 Key 仅短暂经认证本地桥传给 Python。
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\python -m pip install -e ".[dev]"
 # Linux 对应 .venv/bin/python
+
+# 裸启动：配置 API 根地址、模型、Key、目标，并确认本次授权
+recon-agent
+# Windows 仓库已有虚拟环境的入口（在项目目录）
+& '..\.venv\Scripts\recon-agent.exe'
+# 显式打开配置页，或者选择 Rich 隐藏 Key 的兼容输入
+recon-agent --auth --ui rich
 
 # 默认确定性采集：自动运行，不依赖模型
 recon-agent -t example.com --authorized --batch
@@ -26,6 +33,23 @@ recon-agent -t example.com --authorized --batch
 # 会话启动仅创建状态并等待输入：没有模型调用或工具扫描
 recon-agent --session -t example.com --authorized
 ```
+
+裸启动必须使用交互终端。Pi 配置页用 Tab/Shift+Tab 切换，Enter 前往下一项，
+Space/Enter 勾选本次授权，最后在“进入会话”按钮按 Enter；Esc 退出，Ctrl+C 取消。
+配置确认后从 L0 等待任务，不自动测试 API 连接或扫描。`--auth --lab` 可配置自有内网实验目标，
+政府/军事域名和链路本地地址仍拒绝；L1/L2 的原有会话内确认保持不变。
+
+API Key **仅本次进程使用**，配置页始终遮罩；已有 Key 不发送给前端，留空会沿用 Python 内存中的 Key。
+非敏感 API 地址、模型和目标原子保存到用户配置目录的 `launcher.json`，只含这三个字段。
+Key、授权和扫描级别均不保存，每次启动重新确认授权。预填优先级为显式 `--model/-t`、非空
+`RECON_MODEL/RECON_API_BASE`、上次非敏感字段、YAML 默认值；Key 来自现有主模型凭据或
+`RECON_API_KEY`。提交的主连接在本次会话内优先于旧环境变量，备用模型继续使用独立配置。
+配置页自动将裸模型名补成 `openai/模型名`，带供应商前缀的模型保留原值。
+
+`--ui auto` 缺少 Pi 时回退 Rich；`--ui pi` 明确报告缺少依赖。
+非 TTY 或 `--batch` 不进入配置页，也不会从管道读取 Key；请使用现有完整参数命令。
+已有 `-t`、`--session`、`--resume`、`--mcp`、`--help`、`--version`、`--doctor` 行为保留；
+`--auth` 与 `--mcp` 不兼容。
 
 可以只用环境变量指定模型、API 请求根地址和 Key，无需修改 YAML。在仓库根目录打开 PowerShell：
 

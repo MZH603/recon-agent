@@ -12,14 +12,16 @@ class LLMService:
     """Agent 使用的统一模型入口：调用前检查预算，调用后登记消耗。"""
 
     def __init__(self, settings: Settings | None = None, model_override: str | None = None,
-                 guard: BudgetGuard | None = None) -> None:
+                 guard: BudgetGuard | None = None, *, connection_override=None) -> None:
         self._settings = settings or get_settings()
         self.guard = guard or BudgetGuard(
             max_tokens=self._settings.MAX_TOKENS_PER_TASK,
             max_cost=self._settings.MAX_COST_PER_TASK,
         )
-        self.provider: LLMProvider = build_provider(self._settings, model_override)
-        self.model_name = model_override or self._settings.model.name
+        self.provider: LLMProvider = (build_provider(self._settings, model_override)
+            if connection_override is None else build_provider(self._settings, model_override,
+                                                              connection_override=connection_override))
+        self.model_name = connection_override.model if connection_override is not None else model_override or self._settings.model.name
         self.used_fallback = False
 
     async def complete(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:

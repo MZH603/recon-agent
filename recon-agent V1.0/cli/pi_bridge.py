@@ -129,6 +129,22 @@ class PiBridge:
             self.disconnected.set()
             raise
 
+    async def receive_setup(self):
+        """Separate phase: runtime commands never accept connection/authorization."""
+        from cli.launcher import LIMITS, SETUP_FIELDS, valid_text
+        try:
+            command = await read_frame(self.reader)
+            if command == {'type': 'quit'} or command == {'type': 'cancel'}:
+                return command
+            if (set(command) != SETUP_FIELDS or command.get('type') != 'configure' or
+                    type(command.get('authorized')) is not bool or
+                    not all(valid_text(command[k], k, empty=True) for k in LIMITS)):
+                raise ProtocolError('Invalid setup command')
+            return command
+        except (ConnectionError, EOFError):
+            self.disconnected.set()
+            raise
+
     async def send(self, event):
         data = (json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8')
         if len(data) > FRAME_LIMIT:

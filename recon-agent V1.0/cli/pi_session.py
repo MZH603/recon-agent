@@ -233,7 +233,7 @@ async def close_child(child, timeout=3):
 
 async def run_pi_session(target, settings, batch, is_tty, requested_level, model_override,
                          output_format, output_dir, run_pipeline=None, *, resume_id=None,
-                         session_id=None, llm_factory=None):
+                         session_id=None, llm_factory=None, connection_override=None):
     from platforms.paths import get_config_dir
     from tools.registry import build_default
     from output.session_report import save_session_report
@@ -249,7 +249,7 @@ async def run_pi_session(target, settings, batch, is_tty, requested_level, model
     gate = ScanGate(target, batch_mode=batch, is_tty=is_tty, requested_level=0)
     registry = build_default(settings, gate, target)
     runtime = SessionRuntime(target=target, registry=registry,
-        llm=LazyLLM(settings, model_override, llm_factory), gate=gate, settings=settings,
+        llm=LazyLLM(settings, model_override, llm_factory, connection_override=connection_override), gate=gate, settings=settings,
         db_path=get_config_dir() / 'agent_state.sqlite', session_id=identifier,
         system_prompt=session_prompt(registry, target), require_existing=bool(resume_id))
     child = None

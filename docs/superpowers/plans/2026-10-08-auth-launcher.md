@@ -16,17 +16,18 @@
 
 **Modify:** recon-agent V1.0/cli/main.py、cli/pi_bridge.py、cli/session.py、cli/pi_session.py、model/registry.py、core/llm.py、pyproject.toml、README.md、docs/使用说明书.md（依实际现有路径）。
 
-- [ ] 写并运行失败的 Python 测试：defaults/validation/store 符合 spec；save/load 只输出 api_base/model/target；repr/文件/UI 事件不含虚构 Key；显式确认值覆盖环境变量但旧 resolve_model 不变；未知 schema/授权 false 不进入会话。
-- [ ] 实现 launcher 的单次结果（SecretStr 保密）和预填。成功提交调用最小主连接对象；使用原子替换保存非敏感字段，不修改 YAML 或写入 api_key。校验返回固定字段错误。Rich fallback 用隐藏输入确认，失败保留页面继续编辑；不自动调用模型。
-- [ ] 写并运行失败的 Node 表单测试：真实输入 Tab/Shift+Tab/Enter/粘贴/删除、窄终端、Key 从未渲染/未进入历史、授权默认 false、重复提交阻止、错误反馈和清空敏感缓存。
-- [ ] 实现 setup.mjs/setup-app.mjs：使用 Pi 单行组件或独立 masked input，若复用 Input 不得渲染真实 Key，清空组件内部缓存应通过丢弃整个敏感组件。提交后仅向认证本地桥发送一次 configure 对象；UI 显示固定确认错误而不回显任何 Key。
-- [ ] 写并运行失败的实际 TCP roundtrip 与前端清理测试。增加独立 receive_setup（或等价配置桥类）：严格 type/字段/长度/布尔规则，只允许配置阶段命令；运行期 receive 仍拒绝 configure。
-- [ ] 实现 pi_setup 生命周期：前端连接后发送非敏感预填和已有 Key 标记；只在后端校验成功后发 accepted，关闭配置前端，返回单次 Python 结果。失败/退出/断开有期限地关闭连接、等待或终止子进程，避免配置秘密流入日志捕获。
-- [ ] 写并运行失败的 CLI 路由测试：CliRunner 裸参数进入 launcher 并以 L0/session 等待；doctor/version/help/mcp/既有 -t 命令不触发 launcher；--auth 可明确打开；非 TTY/--batch 立即报错不读输入。通过 Typer Context 的参数来源区分裸命令，不能依赖测试进程的 sys.argv。
-- [ ] 实现裸命令/--auth 入口，以及可选 connection_override 传递到 LazyLLM/LLMService/build_provider；旧路径仅 None 时不改变已有函数 monkeypatch/调用签名语义。配置页输入值是显式主连接，不再走旧环境变量覆盖；fallback 仍独立。
-- [ ] 更新 pyproject.toml 生产资产白名单、README/使用说明书：PowerShell 使用 &；裸命令流程；Key 仅本次、已有环境变量可预填、授权每次确认；旧命令仍有效。不要添加登录账号/云同步/真实连接测试/多 profile 等新功能。
-- [ ] 运行并审查：`python -m pytest tests/unit/test_launcher.py tests/unit/test_pi_session.py tests/unit/test_model_connection.py -q`、`npm.cmd test`；所有新测试通过，现有测试按改动合适修正，仅逻辑变化必要时。
+- [x] 写并运行失败的 Python 测试：defaults/validation/store 符合 spec；save/load 只输出 api_base/model/target；repr/文件/UI 事件不含虚构 Key；显式确认值覆盖环境变量但旧 resolve_model 不变；未知 schema/授权 false 不进入会话。
+- [x] 实现 launcher 的单次结果（SecretStr 保密）和预填。成功提交调用最小主连接对象；使用原子替换保存非敏感字段，不修改 YAML 或写入 api_key。校验返回固定字段错误。Rich fallback 用隐藏输入确认，失败保留页面继续编辑；不自动调用模型。
+- [x] 写并运行失败的 Node 表单测试：真实输入 Tab/Shift+Tab/Enter/粘贴/删除、窄终端、Key 从未渲染/未进入历史、授权默认 false、重复提交阻止、错误反馈和清空敏感缓存。
+- [x] 实现 setup.mjs/setup-app.mjs：使用 Pi 单行组件或独立 masked input，若复用 Input 不得渲染真实 Key，清空组件内部缓存应通过丢弃整个敏感组件。提交后仅向认证本地桥发送一次 configure 对象；UI 显示固定确认错误而不回显任何 Key。
+- [x] 写并运行失败的实际 TCP roundtrip 与前端清理测试。增加独立 receive_setup（或等价配置桥类）：严格 type/字段/长度/布尔规则，只允许配置阶段命令；运行期 receive 仍拒绝 configure。
+- [x] 实现 pi_setup 生命周期：前端连接后发送非敏感预填和已有 Key 标记；只在后端校验成功后发 accepted，关闭配置前端，返回单次 Python 结果。失败/退出/断开有期限地关闭连接、等待或终止子进程，避免配置秘密流入日志捕获。
+- [x] 写并运行失败的 CLI 路由测试：CliRunner 裸参数进入 launcher 并以 L0/session 等待；doctor/version/help/mcp/既有 -t 命令不触发 launcher；--auth 可明确打开；非 TTY/--batch 立即报错不读输入。通过 Typer Context 的参数来源区分裸命令，不能依赖测试进程的 sys.argv。
+- [x] 实现裸命令/--auth 入口，以及可选 connection_override 传递到 LazyLLM/LLMService/build_provider；旧路径仅 None 时不改变已有函数 monkeypatch/调用签名语义。配置页输入值是显式主连接，不再走旧环境变量覆盖；fallback 仍独立。
+- [x] 更新 pyproject.toml 生产资产白名单、README/使用说明书：PowerShell 使用 &；裸命令流程；Key 仅本次、已有环境变量可预填、授权每次确认；旧命令仍有效。不要添加登录账号/云同步/真实连接测试/多 profile 等新功能。
+- [x] 运行并审查：`python -m pytest tests/unit/test_launcher.py tests/unit/test_pi_session.py tests/unit/test_model_connection.py -q`、`npm.cmd test`；所有新测试通过，现有测试按改动合适修正，仅逻辑变化必要时。
 - [ ] 提交功能，交给独立 spec reviewer 以及其后 quality reviewer；修改审查问题并复验。
+
 
 ## Root Final Verification / Integration
 
