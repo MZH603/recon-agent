@@ -4,13 +4,15 @@ version = "1.0.0"
 description = "网络安全渗透测试 · 信息搜集 AI Agent V1.0（被动优先 / 三级门控 / 模型无关 / MCP 接入 / 跨平台）"
 readme = "README.md"
 requires-python = ">=3.10"
-# HARD: 核心依赖白名单 ≤5，零死代码
+# Core runtime dependencies include durable graph/checkpoint support.
 dependencies = [
     "typer>=0.9",
     "rich>=13.0",
     "pydantic>=2.5",
     "pyyaml>=6.0",
     "litellm>=1.40",
+    "langgraph>=1.0,<2",
+    "langgraph-checkpoint-sqlite>=3,<4",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +24,7 @@ recon-agent = "cli.main:main"
 recon-agent-mcp = "server.mcp_server:main"
 
 [tool.setuptools.packages.find]
+namespaces = false
 include = [
     "cli*", "core*", "model*", "tools*", "collectors*", "knowledge*",
     "scripts*", "output*", "platforms*", "security*", "gate*", "server*",
@@ -33,3 +36,4 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 tools = ["data/*.txt"]
+cli = ["pi/app.mjs", "pi/view.mjs", "pi/bridge.mjs", "pi/setup.mjs", "pi/setup-app.mjs", "pi/package.json", "pi/package-lock.json"]

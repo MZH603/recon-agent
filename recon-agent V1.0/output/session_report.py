@@ -1,0 +1,132 @@
+"""Adapt durable evidence to standard reports and preserve the entire audit state."""
+from __future__ import annotations
+import json
+from ipaddress import ip_address
+from uuid import uuid4
+from observability.metrics import TaskMetrics
+from output.report import save_report, INCOMPLETE_WATERMARK, DEGRADED_WATERMARK
+from output.report_builder import ReportBuilder
+from tools.base import ToolResult
+from tools.builtin.dns_query import RTYPE_CODES
+
+DNS_TYPES = {code: name for name, code in RTYPE_CODES.items()}
+
+
+def _observations(state):
+    results = list(state.get('results', []))
+    known = {r.get('execution_id') for r in results if r.get('execution_id')}
+    for entry in state.get('executions', []):
+        if entry.get('result') and entry.get('execution_id') not in known:
+            results.append({**entry['result'], 'execution_id': entry['execution_id'],
+                            'target': entry.get('target') or state['target'],
+                            'arguments': entry.get('arguments', {})})
+    return results
+
+
+
+def _add_dns(data, item):
+    """DoH answers carry their own type; socket fallback answers do not."""
+    for record in item.get('records', []):
+        kind = (DNS_TYPES.get(record['type'], f"TYPE{record['type']}") if 'type' in record
+                else item.get('rtype', 'unknown'))
+        value = record.get('data', '')
+        data.dns.setdefault(kind, []).append(value)
+        if kind not in ('A', 'AAAA') or not isinstance(value, str):
+            continue
+        try:
+            address = ip_address(value)
+        except ValueError:
+            continue
+        expected_version = 4 if kind == 'A' else 6
+        if address.version == expected_version:
+            data.ips.append(str(address))
+
+
+def build_session_report(state, level):
+    builder = ReportBuilder(state['target'], level, f"LangGraph 会话 {state.get('session_id', '')} · L{level} 受控采集")
+    data = builder.data
+    results = _observations(state)
+    for raw in results:
+        result = ToolResult.model_validate(raw)
+        name, item = result.name, result.data
+        host = item.get('host') or item.get('target') or raw.get('target') or state['target']
+        data.raw_refs.extend(result.evidence)
+        if result.source_hash:
+            data.raw_refs.append(f'{name} SHA256: {result.source_hash}')
+        if result.degraded:
+            data.degraded.append(f'{name} {host}: 降级结果，confidence={result.confidence}')
+        if not result.success:
+            data.notes.append(f'{name} {host}: 失败/拦截 — {result.error}')
+            continue
+        if name == 'dns_query':
+            _add_dns(data, item)
+        elif name == 'subdomain_enum':
+            data.subdomains.extend(item.get('subdomains', []))
+            for alive in item.get('alive', []):
+                if isinstance(alive, dict):
+                    data.alive_hosts.append(alive['host'])
+                    data.ips.extend(alive.get('ips', []))
+                else:
+                    data.alive_hosts.append(alive)
+        elif name in ('fingerprint', 'deep_fingerprint') or (name == 'httpx_probe' and 'tech' in item):
+            # Independent cards must survive the builder's same-host replacement rule.
+            if any(card.get('host') == host and card != item for card in data.tech_cards):
+                data.doubts.append(f'{host}: 多次指纹观测有差异；保留全部卡片，待复核')
+            data.tech_cards.append(dict(item, host=host))
+        elif name in ('nmap_scan', 'builtin_port_scan'):
+            previous = data.port_map.get(host, [])
+            builder.add_port_scan(host, result)
+            data.port_map[host] = sorted(set(previous + data.port_map.get(host, [])))
+        elif name == 'dir_enum':
+            builder.add_dir_enum(host, result)
+        elif name == 'script_probe':
+            builder.add_script_probe(host, result)
+        elif name == 'takeover_check':
+            data.doubts.append(f'{host}: 接管候选（需人工复核） {json.dumps(item, ensure_ascii=False)}')
+        else:
+            data.notes.append(f'{name} {host}: {json.dumps(item, ensure_ascii=False)}')
+    data.subdomains = sorted(set(data.subdomains))
+    data.alive_hosts = sorted(set(data.alive_hosts))
+    data.ips = sorted(set(data.ips))
+    data.raw_refs = list(dict.fromkeys(data.raw_refs))
+    data.doubts.extend('冲突观测（保留原始证据）: ' + json.dumps(c, ensure_ascii=False)
+                       for c in state.get('conflicts', []))
+    for event in state.get('events', []):
+        data.notes.append('会话事件: ' + json.dumps(event, ensure_ascii=False))
+    uncertain = [e for e in state.get('executions', []) if e.get('status') != 'completed']
+    for entry in uncertain:
+        data.doubts.append('uncertain/未完成执行，未自动重试: ' + json.dumps(entry, ensure_ascii=False))
+    unknown = state.get('cost_unknown_calls', 0)
+    data.notes.append(f"模型 tokens={state.get('used_tokens', 0)}; 已知费用 USD {state.get('used_cost', 0):.6f}" +
+                      (f'; 费用未知 {unknown} 次，无法证明总费用精确上限' if unknown else ''))
+    if state.get('answer'):
+        data.llm_analysis = '模型分析（未验证，不能视为已确认发现）:\n\n' + state['answer']
+    marks = []
+    if state.get('status') != 'completed' or uncertain or any(not r['success'] for r in results):
+        marks.append(INCOMPLETE_WATERMARK)
+    if data.degraded:
+        marks.append(DEGRADED_WATERMARK)
+    metrics = TaskMetrics(tool_calls=len(results), tool_success=sum(r['success'] for r in results),
+        model_calls=state.get('decisions', 0), scan_level_reached=level,
+        contradiction_count=len(state.get('conflicts', [])), uncertainty_count=len(data.doubts),
+        total_cost_usd=state.get('used_cost', 0),
+        extra={'used_tokens': state.get('used_tokens', 0), 'cost_unknown_calls': unknown})
+    return data, metrics, marks, results
+
+
+def save_session_report(state, level=0, output_format='markdown', out_dir=None):
+    if output_format not in ('markdown', 'json', 'csv'):
+        raise ValueError('Unsupported report format')
+    data, metrics, marks, results = build_session_report(state, level)
+    paths = save_report(data, metrics, marks, out_dir, filename_suffix=uuid4().hex[:12])
+    payload = json.loads(paths['json'].read_text(encoding='utf-8'))
+    payload['session'] = state
+    payload['observations'] = results
+    paths['json'].write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding='utf-8')
+    with paths['markdown'].open('a', encoding='utf-8') as handle:
+        handle.write('\n\n## 完整工具证据（非可信原始数据）\n\n')
+        for result in results:
+            handle.write(f"### {result['name']} · {result.get('execution_id', '')}\n\n")
+            handle.write('```json\n' + json.dumps(result, ensure_ascii=False, indent=2).replace('```', '\\u0060\\u0060\\u0060') + '\n```\n\n')
+    paths['selected'] = paths[output_format]
+    return paths

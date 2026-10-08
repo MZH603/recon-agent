@@ -143,6 +143,7 @@ def save_report(
     metrics: TaskMetrics,
     watermarks: list[str],
     out_dir: Path | None = None,
+    filename_suffix: str = "",
 ) -> dict[str, Path]:
     """保存 Markdown + JSON（始终）与 CSV 资产清单，返回路径表（跨平台 pathlib）。"""
     out_dir = out_dir or get_output_dir()
@@ -150,6 +151,9 @@ def save_report(
     stamp = time.strftime("%Y%m%d_%H%M%S")
     safe_target = "".join(c if c.isalnum() else "_" for c in data.target)
     base = out_dir / f"recon_{safe_target}_{stamp}"
+
+    if filename_suffix:
+        base = base.with_name(base.name + "_" + filename_suffix)
 
     md_path = base.with_suffix(".md")
     md_path.write_text(render_markdown(data, metrics, watermarks), encoding="utf-8", newline="")

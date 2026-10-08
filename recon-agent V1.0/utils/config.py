@@ -5,21 +5,50 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer, field_validator
 
 from platforms.paths import get_config_dir
+
+
+def optional_api_key(value: str | SecretStr | None) -> SecretStr | None:
+    """Normalize blank credentials while keeping configured keys masked."""
+    if value is None:
+        return None
+    if isinstance(value, SecretStr):
+        return value if value.get_secret_value().strip() else None
+    if not isinstance(value, str):
+        raise ValueError("api_key must be a string")
+    return SecretStr(value) if value.strip() else None
 
 
 class ModelConfig(BaseModel):
     """模型接入配置：name 为任意 LiteLLM 支持的模型名，改配置即换模型（HARD：零代码改动）。"""
 
+    model_config = ConfigDict(validate_assignment=True)
+
     provider: str = "litellm"
     name: str = "gpt-4o-mini"
+    api_base: str | None = None
+    api_key: SecretStr | None = Field(default=None, exclude=True, repr=False)
+    api_key_env: str | None = None
     temperature: int = 0  # HARD: 结构化任务确定性最高
     max_retries: int = 2
     timeout: int = 120
     fallback: list[str] = Field(default_factory=lambda: ["claude-3-5-sonnet", "deepseek-chat"])
     custom_endpoints: list[dict] = Field(default_factory=list)
+
+    _normalize_api_key = field_validator("api_key", mode="before")(optional_api_key)
+
+    @field_validator("custom_endpoints", mode="before")
+    @classmethod
+    def mask_endpoint_keys(cls, endpoints: list[dict]) -> list[dict]:
+        return [dict(endpoint, api_key=optional_api_key(endpoint["api_key"]))
+                if "api_key" in endpoint else dict(endpoint) for endpoint in endpoints]
+
+    @field_serializer("custom_endpoints")
+    def serialize_endpoints(self, endpoints: list[dict]) -> list[dict]:
+        return [{key: value for key, value in endpoint.items() if key != "api_key"}
+                for endpoint in endpoints]
 
 
 class Settings(BaseModel):

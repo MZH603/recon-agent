@@ -2,12 +2,13 @@
 
 三种运行模式：
 - 默认流水线：L0 确定性被动采集，无模型依赖；
-- --session：LLM 驱动 ReAct 会话（模型不可达自动降级离线）；
+- --session：LangGraph 持久交互会话（模型不可达暂停，可报告与恢复）；
 - --mcp：MCP stdio 服务器，供 Claude/ZCode 等第三方 AI Agent 自主接入。
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 import typer
@@ -22,7 +23,7 @@ console = Console()
 BANNER = (
     "[bold cyan]recon-agent[/bold cyan] [bold]V1.0[/bold] — 信息搜集 AI Agent\n"
     "[yellow]合规声明：仅用于已获合法授权的安全测试。隐蔽性与目标可用性第一，"
-    "默认 L0 纯被动，绝不触碰目标。[/yellow]"
+    "默认 L0 受控采集，部分指纹与 SAN 查询会接触远端。[/yellow]"
 )
 
 PROFILE_LEVELS = {"passive": 0, "stealth": 1, "aggressive": 2}
@@ -50,6 +51,7 @@ def main() -> None:
 
 @app.command()
 def run(
+    ctx: typer.Context,
     target: str = typer.Option(None, "-t", "--target", help="目标：域名/IP/URL/CIDR（MCP 模式可不填）"),
     authorized: bool = typer.Option(False, "--authorized", help="声明已获合法授权（必需）"),
     profile: str = typer.Option("passive", "--profile", help="passive=L0 / stealth=L1 / aggressive=L2"),
@@ -58,10 +60,13 @@ def run(
     batch: bool = typer.Option(False, "--batch", help="非交互模式（HARD：永久禁止 L2）"),
     lab: bool = typer.Option(False, "--lab", help="实验环境模式：解锁内网/环回目标（仅限自有/自建环境）"),
     session: bool = typer.Option(False, "--session", help="会话模式（REPL，可逐步升级 L1/L2）"),
+    resume: str = typer.Option(None, "--resume", help="恢复已有会话 ID（必须配合 --session）"),
+    ui: str = typer.Option('auto', '--ui', help='会话界面: auto|pi|rich'),
+    auth: bool = typer.Option(False, '--auth', help='打开本次进程的 API 与目标配置页'),
     mcp_mode: bool = typer.Option(False, "--mcp", help="MCP stdio 服务器模式（供第三方 Agent 接入）"),
     authorized_for: str = typer.Option(None, "--authorized-for", help="MCP 模式授权范围（逗号分隔域名，HARD 必填）"),
     allow_l1: bool = typer.Option(False, "--allow-l1", help="MCP 模式放行 L1（HARD：L2 在 MCP 下永久禁止）"),
-    output_format: str = typer.Option("markdown", "--output-format", help="markdown|json|csv"),
+    output_format: str = typer.Option("markdown", "--output-format", "--format", help="markdown|json|csv"),
     max_tokens: int = typer.Option(None, "--max-tokens", help="任务 token 预算"),
     max_cost: float = typer.Option(None, "--max-cost", help="任务成本预算（USD）"),
     output: str = typer.Option(None, "-o", "--output", help="输出文件前缀目录"),
@@ -75,6 +80,12 @@ def run(
                                  help="打印版本号"),
 ) -> None:
     """对授权目标执行信息搜集，或以 MCP 服务器模式供 Agent 接入。"""
+    if (resume and not session) or (mcp_mode and (session or resume or auth)):
+        err("--resume 必须配合 --session；会话与 --mcp 不兼容")
+        raise typer.Exit(2)
+    if ui not in ('auto', 'pi', 'rich'):
+        err('--ui 必须为 auto|pi|rich')
+        raise typer.Exit(2)
     if not mcp_mode:
         console.print(BANNER)
     settings = _settings_with(max_tokens, max_cost)
@@ -86,29 +97,76 @@ def run(
         )
     requested = _resolve_level(profile, level)
     is_tty = sys.stdin.isatty()
+    # Typer may vendor Click; compare the documented enum name across versions.
+    bare = all(getattr(ctx.get_parameter_source(name), 'name', None) == 'DEFAULT' for name in ctx.params)
+    launch = auth or bare
+    interactive = is_tty and sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and not batch
 
     async def _flow() -> int:
+        current_target, current_model = target, model
+        connection = None
+        use_session = session
+        if launch:
+            if not interactive:
+                err('启动配置需要交互终端；请使用已有完整参数命令（-t/--authorized 等），不要通过管道输入 API Key。')
+                return 2
+            from cli.launcher import prefill, run_rich_setup, save_defaults
+            defaults = prefill(settings, model=model, target=target)
+            setup_runner = run_rich_setup
+            if ui != 'rich':
+                from cli.pi_bridge import pi_available
+                available, reason = pi_available()
+                if available:
+                    from cli.pi_setup import run_pi_setup
+                    setup_runner = run_pi_setup
+                elif ui == 'pi':
+                    err('Pi 界面不可用: ' + reason)
+                    return 2
+                else:
+                    warn('Pi 依赖未安装，使用 Rich 兼容界面。' + reason)
+            result, code = await setup_runner(defaults, settings)
+            if result is None:
+                return code
+            current_target, current_model, connection = result.target, result.connection.model, result.connection
+            use_session = True
+            try:
+                save_defaults(result.public())
+            except (OSError, ValueError):
+                warn('本次配置已确认；无法保存非敏感默认字段。')
         if mcp_mode:
             from server.mcp_server import serve
 
             roots = [x for x in (authorized_for or "").split(",") if x.strip()]
             return await serve(roots, allow_l1, settings)
-        if not target:
+        if not current_target:
             err("缺少目标：请用 -t/--target 指定（MCP 服务器模式请用 --mcp）")
             return 2
-        if not authorized:
-            granted = await _confirm_authorization(target, batch, is_tty)
+        if not authorized and not launch:
+            granted = await _confirm_authorization(current_target, batch, is_tty)
             if not granted:
                 err("未获授权：仅允许 --authorized 声明后使用；被动模式也已拒绝（HARD）")
                 return 2
         from cli import pipeline, session as session_mod
 
-        if session:
-            return await session_mod.run_session(
-                target=target, settings=settings, batch=batch, is_tty=is_tty,
-                requested_level=requested, model_override=model,
+        if use_session:
+            runner = session_mod.run_session
+            if is_tty and sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and not batch and ui != 'rich':
+                from cli.pi_bridge import pi_available
+                available, reason = pi_available()
+                if available:
+                    from cli.pi_session import run_pi_session
+                    runner = run_pi_session
+                elif ui == 'pi':
+                    err('Pi 界面不可用: ' + reason)
+                    return 2
+                else:
+                    warn('Pi 依赖未安装，使用 Rich 兼容界面。' + reason)
+            kwargs = {} if connection is None else {'connection_override': connection}
+            return await runner(
+                target=current_target, settings=settings, batch=batch, is_tty=is_tty,
+                requested_level=0 if launch else requested, model_override=current_model,
                 output_format=output_format, output_dir=output,
-                run_pipeline=pipeline.run_pipeline,
+                run_pipeline=pipeline.run_pipeline, resume_id=resume, **kwargs,
             )
         if requested >= 1 and not batch:
             # 级联策略（HARD：门控语义不变）：请求高级别时自动执行全部低等级扫描

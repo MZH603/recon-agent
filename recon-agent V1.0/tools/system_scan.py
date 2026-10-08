@@ -11,11 +11,10 @@ from __future__ import annotations
 import asyncio
 import re
 
-import asyncio
-
 from pydantic import BaseModel, Field, field_validator
 
 from core.tool_discovery import discover_system_tools
+from platforms.subprocess import kill_and_reap
 from tools.base import BaseTool, ToolResult
 from utils.config import Settings, get_settings
 from utils.logger import audit
@@ -102,8 +101,11 @@ class SystemScanTool(BaseTool):
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=self._settings.CONNECT_TIMEOUT * 3)
         except asyncio.TimeoutError:
-            proc.kill()
+            await kill_and_reap(proc)
             return ToolResult.err(self.name, f"[超时] {tool_name} 执行超时，已终止")
+        except asyncio.CancelledError:
+            await kill_and_reap(proc)
+            raise
 
         stdout_text = stdout.decode("utf-8", errors="replace")
         stderr_text = stderr.decode("utf-8", errors="replace")
