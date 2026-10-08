@@ -25,22 +25,35 @@ class ModelSpec(BaseModel):
 def resolve_model(
     settings: Settings, override: str | None = None, *, inherit_primary: bool = True,
 ) -> ModelSpec:
-    """命名端点独立接入；普通主模型/CLI 覆盖继承主连接，fallback 不继承。"""
-    name = override or settings.model.name
+    """解析独立端点/主连接；RECON_* 仅覆盖主模型，fallback 不继承。"""
+    environment_model = os.environ.get("RECON_MODEL", "").strip() if inherit_primary else ""
+    name = override or environment_model or settings.model.name
     for ep in settings.model.custom_endpoints:
         if name in (ep.get("name"), ep.get("model")):
-            return ModelSpec(
+            spec = ModelSpec(
                 model=ep.get("model") or name,
                 api_base=ep.get("api_base") or ep.get("base_url"),
                 api_key=ep.get("api_key"),
                 api_key_env=ep.get("api_key_env"),
             )
-    return ModelSpec(
-        model=name,
-        api_base=settings.model.api_base if inherit_primary else None,
-        api_key=settings.model.api_key if inherit_primary else None,
-        api_key_env=settings.model.api_key_env if inherit_primary else None,
-    )
+            break
+    else:
+        spec = ModelSpec(
+            model=name,
+            api_base=settings.model.api_base if inherit_primary else None,
+            api_key=settings.model.api_key if inherit_primary else None,
+            api_key_env=settings.model.api_key_env if inherit_primary else None,
+        )
+    if inherit_primary:
+        api_base = os.environ.get("RECON_API_BASE", "").strip()
+        api_key = optional_api_key(os.environ.get("RECON_API_KEY"))
+        updates = {}
+        if api_base:
+            updates["api_base"] = api_base
+        if api_key:
+            updates["api_key"] = api_key
+        spec = spec.model_copy(update=updates)
+    return spec
 
 
 class FallbackProvider(LLMProvider):
