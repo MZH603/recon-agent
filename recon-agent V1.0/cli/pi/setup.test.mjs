@@ -64,3 +64,23 @@ test('escape and CtrlC clear unfinished secret paste and exit safely',()=>{
   assert.equal(secret.pasteBuffer,'');assert.equal(view.inputs.api_key,null);
  }
 });
+
+for(const [field,focus,value] of [
+  ['api_base',0,'https://api.test/'+'x'.repeat(301)],
+  ['api_key',2,'key-'+ 'x'.repeat(2996)],
+]){
+ for(const [label,navigation] of [['Tab','\t'],['ShiftTab','\x1b[Z'],['Enter','\r']]){
+  test(`${label} preserves the long ${field} value when leaving its field`,()=>{
+   const view=module.createSetupView(terminal,()=>{});
+   for(let i=0;i<focus;i++)view.form.handleInput('\t');
+   // Exercise real paste/edit handling before leaving the field, rather than
+   // setting an overlong component value that bypasses the field's edit limit.
+   view.form.handleInput('\x1b[200~'+value+'\x1b[201~');
+   assert.equal(view.inputs[field].getValue(),value);
+   view.form.handleInput(navigation);
+   assert.equal(view.inputs[field].getValue(),value,`${field} changed on ${JSON.stringify(navigation)}`);
+   if(field==='api_key')assert.ok(!view.form.render(80).join('').includes(value));
+   view.stop();
+  });
+ }
+}

@@ -57,8 +57,8 @@ export function createSetupView(terminal,send,onExit=()=>{}){
    if(data==='\x03'){quit(130);return;}
    if(data==='\x1b'){quit(0);return;}
    if(view.busy)return;
-   const input=view.inputs[fields[view.focus]];
-   if(input?.isInPaste){input.handleInput(data);input.pasteBuffer=input.pasteBuffer.slice(0,limits[fields[view.focus]]+6);}
+   const field=fields[view.focus],input=view.inputs[field],limit=limits[field];
+   if(input?.isInPaste){input.handleInput(data);input.pasteBuffer=input.pasteBuffer.slice(0,limit+6);}
    else if(data==='\t')move(1);
    else if(data==='\x1b[Z')move(-1);
    else if(data==='\r'||data==='\n'){
@@ -70,7 +70,7 @@ export function createSetupView(terminal,send,onExit=()=>{}){
     }
    }else if(view.focus===4&&data===' ')view.authorized=!view.authorized;
    else if(input)input.handleInput(data);
-   if(input&&input.getValue().length>limits[fields[view.focus]])input.setValue(input.getValue().slice(0,limits[fields[view.focus]]));
+   if(input&&input.getValue().length>limit)input.setValue(input.getValue().slice(0,limit));
    tui.requestRender();
   }
  };
