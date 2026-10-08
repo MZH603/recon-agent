@@ -26,12 +26,12 @@
 - [x] 实现裸命令/--auth 入口，以及可选 connection_override 传递到 LazyLLM/LLMService/build_provider；旧路径仅 None 时不改变已有函数 monkeypatch/调用签名语义。配置页输入值是显式主连接，不再走旧环境变量覆盖；fallback 仍独立。
 - [x] 更新 pyproject.toml 生产资产白名单、README/使用说明书：PowerShell 使用 &；裸命令流程；Key 仅本次、已有环境变量可预填、授权每次确认；旧命令仍有效。不要添加登录账号/云同步/真实连接测试/多 profile 等新功能。
 - [x] 运行并审查：`python -m pytest tests/unit/test_launcher.py tests/unit/test_pi_session.py tests/unit/test_model_connection.py -q`、`npm.cmd test`；所有新测试通过，现有测试按改动合适修正，仅逻辑变化必要时。
-- [ ] 提交功能，交给独立 spec reviewer 以及其后 quality reviewer；修改审查问题并复验。
+- [x] 提交功能，交给独立 spec reviewer 以及其后 quality reviewer；修改审查问题并复验。
 
 
 ## Root Final Verification / Integration
 
-- [ ] worktree 使用根 .venv 的 python（cwd 为工作区 nested project，避免改 editable 指向）；Pi node_modules 从原项目已安装依赖复制到工作区。
-- [ ] 运行完整离线 Python：`python -m pytest --ignore=tests/unit/test_nmap_fallback.py -k 'not golden_08' -q`，隔离 APPDATA；运行 Node 全部测试。
-- [ ] 本地 wheel 构建和资产 whitelist 校验；Windows ConPTY 运行 `python -m cli.main` 裸命令，输入非敏感 fixture 参数/虚构 Key/授权后进入 idle，status/quit，另测 Ctrl+C；不进行 API 调用或扫描。
-- [ ] 写验证报告，按已授权范围合回原项目并验证安装的 recon-agent.exe 裸命令；清理拥有的工作区。不重复请求相同方案的批准。
+- [x] worktree 使用根 .venv 的 python（cwd 为工作区 nested project，避免改 editable 指向）；Pi node_modules 从原项目已安装依赖复制到工作区。
+- [x] 运行完整离线 Python：`python -m pytest --ignore=tests/unit/test_nmap_fallback.py -k 'not golden_08' -q`，隔离 APPDATA；运行 Node 全部测试。
+- [x] 本地 wheel 构建和资产 whitelist 校验；Windows ConPTY 运行 `python -m cli.main` 裸命令，输入非敏感 fixture 参数/虚构 Key/授权后进入 idle，status/quit，另测 Ctrl+C；不进行 API 调用或扫描。
+- [x] 写验证报告，按已授权范围合回原项目并验证安装的 recon-agent.exe 裸命令；清理拥有的工作区。不重复请求相同方案的批准。
