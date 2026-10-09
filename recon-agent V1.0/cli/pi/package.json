@@ -1,8 +1,0 @@
-{
-  "name": "recon-agent-pi-ui",
-  "private": true,
-  "type": "module",
-  "engines": {"node": ">=22.19.0"},
-  "scripts": {"test": "node --test *.test.mjs"},
-  "dependencies": {"@earendil-works/pi-tui": "1.0.4"}
-}
