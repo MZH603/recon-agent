@@ -170,6 +170,14 @@ async def kill_and_reap(proc):
     return confirmed
 
 
+async def kill_and_reap(proc):
+    """Drain pipes and reap a cancelled tool before releasing the session owner."""
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    await proc.communicate()
+
+
 async def run_command(
     args: list[str],
     timeout: float = 30,
