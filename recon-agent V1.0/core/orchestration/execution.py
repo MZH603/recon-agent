@@ -21,14 +21,15 @@ class ExecutionNodes:
                 tool.min_level > self.gate.current_level()) or (tool.min_level == 2 and not self.gate.verify_signature()):
             return {'route': 'validate'}
         arguments = params.model_dump(mode='json')
-        previous = await self.store.lookup(self.session_id, call['execution_id'], call['name'], arguments, state.get('task_id', ''))
+        previous = await self.store.lookup(self.session_id, call['execution_id'], call['name'], arguments, state.get('task_id', ''),
+            reuse_completed=getattr(tool, 'cacheable', True), authorized_retry=bool(call.get('authorized_retry')))
         if previous and previous['status'] == 'completed':
             result = {**previous['result'], 'cached': previous['execution_id'] != call['execution_id']}
             return {'current_result': result, 'route': 'evaluate'}
         if previous and previous['status'] == 'started':
             attempt = 0
             while True:
-                question = ('This action was started but its outcome was not committed. Explicitly retry or skip?'
+                question = ('This action may still be executing or its outcome is unknown. Explicitly retry or skip?'
                             if attempt == 0 else 'Please explicitly choose retry or skip.')
                 pending = self._pending('uncertain', question,
                                         options=['retry', 'skip'], action=call['name'])
@@ -42,12 +43,11 @@ class ExecutionNodes:
                 attempt += 1
             if choice == 'skip':
                 result = ToolResult.err(call['name'], 'Uncertain execution skipped by operator.').model_dump()
-                await self.store.complete(self.session_id, previous['execution_id'], result)
                 return {'current_result': result, 'route': 'evaluate'}
             # A retry is a new action, and L2 always obtains another per-action confirmation.
-            result = ToolResult.err(call['name'], 'Uncertain attempt closed; operator explicitly requested retry.').model_dump()
-            await self.store.complete(self.session_id, previous['execution_id'], result)
-            retried = {**call, 'execution_id': uuid4().hex}
+            # Operator permission applies to this new attempt only. The old outcome
+            # remains unknown in the journal, even if the new attempt succeeds.
+            retried = {**call, 'execution_id': uuid4().hex, 'authorized_retry': True}
             self._permit = None
             return {'queued_calls': [retried] + state['queued_calls'][1:], 'route': 'validate'}
         actions = await self.store.action_count(self.session_id)
@@ -71,25 +71,35 @@ class ExecutionNodes:
         started = monotonic()
         result = None
         try:
-            self._emit('tool_start', name=call['name'])
-            result = (await self.registry.execute(NormalizedToolCall(id=call['id'], name=call['name'], arguments=arguments))).model_dump(mode='json')
+            self._emit('tool_start', name=call['name'], execution_id=call['execution_id'])
+            def progress(payload):
+                self._emit('tool_late' if payload.get('status')=='late' else 'tool_wait', **payload)
+            result = (await self.registry.execute(NormalizedToolCall(id=call['id'], name=call['name'], arguments=arguments),
+                execution_id=call['execution_id'], on_progress=progress)).model_dump(mode='json')
         finally:
             self.gate._prompt_fn = original_prompt
             self._permit = None
-            self._emit('tool_end', name=call['name'], success=bool(result and result['success']),
-                       elapsed=monotonic() - started)
+            if result is None:
+                self._emit('tool_cancelled', name=call['name'], execution_id=call['execution_id'], elapsed=monotonic()-started)
         # Completed result is committed before graph checkpointing. A crash after this
         # commit reuses the complete payload instead of repeating the side effect.
         result = self._annotate(call, result)
+        from tools.runtime.result_payload import ResultPayloads
+        result = ResultPayloads(self.settings).prepare(result, self.target)
         await self.store.complete(self.session_id, call['execution_id'], result)
+        self._emit('tool_end', name=call['name'], execution_id=call['execution_id'], success=result['success'],
+                   elapsed=monotonic()-started, result=ResultPayloads(self.settings).for_model(result))
         return {'current_result': result, 'actions': actions + 1, 'route': 'evaluate'}
 
     async def _evaluate(self, state):
         result = state['current_result']
         update = self._consume(state, result)
         update['current_result'] = None
+        if result['name'] == 'tool_catalog' and result['success']:
+            self.registry.select_tools(result.get('data', {}).get('selected_tools', []))
+            update['selected_tool_names'] = self.registry.selected_tool_names
         if not result['success']:
-            return {**update, **self._pause_update('tool_failure', result.get('error') or 'Tool failed. Choose a next step.', options=['Continue', 'Stop'])}
+            return {**update, 'route': 'validate' if update['queued_calls'] else 'decide'}
         detector = ContradictionDetector()
         for item in update['results']:
             tech = item.get('data', {}).get('tech') or {}

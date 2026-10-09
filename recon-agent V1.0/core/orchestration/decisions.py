@@ -6,9 +6,11 @@ from uuid import uuid4
 from pydantic import ValidationError
 from langgraph.types import interrupt
 from core.orchestration.controls import CONTROLS, control_specs
+from core.orchestration.completion import completion_text, REMINDER
+from core.orchestration.model_context import prepare_context
 from efficiency.budget_guard import BudgetExhausted
 from model.cost import valid_cost
-from model.base import ModelUnavailable, parse_xml_tool_calls, StreamUsage, response_events
+from model.base import ModelUnavailable, parse_xml_tool_calls, StreamUsage, response_events, conservative_tokens
 from tools.base import ToolResult
 
 
@@ -16,66 +18,92 @@ class DecisionNodes:
     async def _decide(self, state):
         usage = await self.store.usage(self.session_id)
         decisions = max(state['decisions'], usage['decisions'])
-        unknown_costs = max(state.get("cost_unknown_calls", 0), usage["cost_unknown_calls"])
+        task_usage = await self.store.task_usage(self.session_id, state['task_id'])
+        unknown_costs = task_usage['cost_unknown_calls']
+        estimated_calls = task_usage['usage_estimated_calls']
         if decisions - state.get('segment_decisions', 0) >= self.max_decisions:
             return self._pause_update('limit', 'Decision limit reached. Continue grants one more bounded segment; budget remains cumulative.', options=['Continue', 'Stop'])
+        self.registry.select_tools(state.get('selected_tool_names', []))
+        tools = self.registry.specs() + control_specs()
+        messages, context_update = prepare_context(
+            state, self.gate, self.guard, self.settings.CONTEXT_BUDGET,
+            getattr(self.settings, 'COMPACT_TRIGGER_RATIO', .70), tools=tools,
+            count_tokens=getattr(self.llm, 'count_tokens', None))
+        self._emit('context', **{key: value for key, value in context_update.items()
+                                if key not in ('context_history', 'context_cursor')})
         try:
             self.guard.check()
         except BudgetExhausted as exc:
-            return self._pause_update('budget', str(exc), options=['Stop'])
+            return {**context_update, **self._pause_update('budget', str(exc) + '。用 /budget cost USD 增加费用上限后继续，已用费用不清零。', options=['Stop'])}
+        if context_update['context_limited']:
+            return {**context_update, **self._pause_update('context_limit',
+                'Required instructions, recent turns and tool schemas exceed the context capacity. '
+                'Use /new to start a fresh task, reduce the input, or select fewer tools before continuing.',
+                options=['Stop'])}
         # Commit the decision reservation before any model call, so crashes cannot reset limits.
         decisions += 1
-        await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs)
+        await self.store.save_task_usage(self.session_id, state['task_id'], decisions, self.guard.used_tokens, self.guard.used_cost, unknown_costs, estimated_calls)
         before_tokens, before_cost = self.guard.used_tokens, self.guard.used_cost
         partial = StreamUsage()
         response = None
-        tools = self.registry.specs() + control_specs()
         def forward(delta):
             partial.add(delta)
             self._emit(delta.kind if delta.kind in ('retry', 'fallback') else 'delta', delta=delta)
         try:
             self._emit('model_start')
             if self.on_event is not None and hasattr(self.llm, 'complete_stream'):
-                response = await self.llm.complete_stream(state['messages'], tools, forward)
+                response = await self.llm.complete_stream(messages, tools, forward)
             else:
-                response = await self.llm.complete(state['messages'], tools)
+                response = await self.llm.complete(messages, tools)
                 if self.on_event is not None:
                     response_events(response, forward)
         except (ModelUnavailable, BudgetExhausted) as exc:
             kind = 'budget' if isinstance(exc, BudgetExhausted) else 'model_unavailable'
-            return {'decisions': decisions, **self._pause_update(kind, f'{exc}. Choose whether to continue.', options=['Continue', 'Stop'])}
+            return {'decisions': decisions, **context_update, **self._pause_update(kind, f'{exc}. Choose whether to continue.', options=['Continue', 'Stop'])}
         finally:
             # Independent journal persistence is required even when the graph node is cancelled.
             if response is not None:
                 # Register before end observers: they may propagate cancellation too.
-                tokens = response.token_usage.get('input', 0) + response.token_usage.get('output', 0)
+                token_usage = response.token_usage
+                known_tokens = {key: isinstance(token_usage.get(key), int) and not isinstance(token_usage.get(key), bool) and token_usage[key] >= 0 for key in ('input', 'output')}
+                estimated = not all(known_tokens.values())
+                count = getattr(self.llm, 'count_tokens', lambda text: max(1, len(text) // 4))
+                input_tokens = token_usage['input'] if known_tokens['input'] else conservative_tokens(json.dumps(messages, ensure_ascii=False) + json.dumps(tools, ensure_ascii=False), count)
+                output_tokens = token_usage['output'] if known_tokens['output'] else conservative_tokens(response.content + response.reasoning_content + str(response.tool_calls), count)
+                tokens = max(0, input_tokens) + max(0, output_tokens)
+                estimated_calls += int(estimated or token_usage.get('estimated', False) or token_usage.get('usage_estimated', False))
                 self.guard.used_tokens = max(self.guard.used_tokens, before_tokens + tokens)
                 cost = valid_cost(response.token_usage.get('cost'))
                 unknown_costs += int(cost is None)
                 self.guard.used_cost = max(self.guard.used_cost, before_cost + (cost or 0.0))
             elif partial.started:
                 count = getattr(self.llm, 'count_tokens', lambda text: max(1, len(text) // 4))
-                consumed = partial.partial(state['messages'], count, tools)
+                consumed = partial.partial(messages, count, tools)
                 self.guard.used_tokens = max(self.guard.used_tokens,
                     before_tokens + consumed['input'] + consumed['output'])
-                unknown_costs += 1
-            await self.store.save_usage(self.session_id, decisions, self.guard.used_tokens,
-                                        self.guard.used_cost, unknown_costs)
+                unknown_costs += int(valid_cost(partial.usage.get('cost')) is None)
+                estimated_calls += int(consumed['estimated'])
+                self.guard.used_cost = max(self.guard.used_cost, before_cost + (valid_cost(partial.usage.get('cost')) or 0.0))
+            await self.store.save_task_usage(self.session_id, state['task_id'], decisions, self.guard.used_tokens,
+                                        self.guard.used_cost, unknown_costs, estimated_calls)
             self._emit('model_end', success=response is not None)
         calls = response.tool_calls or parse_xml_tool_calls(response.content)
         native = bool(response.tool_calls)
-        message = {'role': 'assistant', 'content': response.content}
+        visible, complete = completion_text(response.content)
+        message = {'role': 'assistant', 'content': visible if complete else response.content}
         if response.reasoning_content:
             message['reasoning_content'] = response.reasoning_content
         if native:
             message['tool_calls'] = [{'id': c.id, 'type': 'function', 'function':
                 {'name': c.name, 'arguments': json.dumps(c.arguments, ensure_ascii=False)}} for c in calls]
-        update = {'decisions': decisions, 'used_tokens': self.guard.used_tokens,
-                  'used_cost': self.guard.used_cost, 'cost_unknown_calls': unknown_costs, 'messages': state['messages'] + [message]}
+        update = {**context_update, 'decisions': decisions, 'used_tokens': self.guard.used_tokens,
+                  'used_cost': self.guard.used_cost, 'cost_unknown_calls': unknown_costs, 'usage_estimated_calls': estimated_calls, 'messages': state['messages'] + [message]}
         if not calls:
-            return {**update, **self._pause_update('clarification',
-                'The model supplied text without explicit completion. What should happen next?',
-                options=['Continue', 'Stop'])}
+            if complete:
+                self._emit('completed', answer=visible)
+                return {**update, 'answer': visible, 'status': 'completed', 'pending': None, 'route': 'end'}
+            return {**update, 'messages': update['messages'] + [{'role': 'system', 'content': REMINDER}],
+                    'route': 'decide', 'pending': None}
         return {**update, 'queued_calls': [{**c.model_dump(), 'native': native, 'execution_id': uuid4().hex} for c in calls],
                 'route': 'validate', 'pending': None}
 
@@ -101,15 +129,6 @@ class DecisionNodes:
                 self._emit('plan', text=params.plan)
                 return {**update, 'plan': params.plan, 'schema_attempts': 0,
                         'route': 'validate' if update['queued_calls'] else 'decide'}
-            known = {e for r in state['results'] if r['success'] for e in r['evidence']}
-            evidence_ok = bool(params.evidence) and set(params.evidence) <= known
-            clarification_ok = params.clarification_only and not state['results'] and not params.evidence
-            if not evidence_ok and not clarification_ok:
-                rejected = ToolResult.err(call['name'], 'Completion requires known tool evidence; unsupported findings remain unverified.').model_dump()
-                update = self._consume(state, rejected, record=False)
-                return {**update, **self._pause_update('evidence', 'Completion has no supporting tool evidence. Clarify the task or continue collecting evidence.', options=['Continue', 'Stop'])}
-            closing = self._cancel_queue({**state, **update}, 'Task explicitly completed; queued action cancelled.')
-            return {**update, **closing, 'answer': params.answer if evidence_ok else params.answer + ' [无证据]', 'status': 'completed', 'pending': None, 'route': 'end'}
         _, error, kind = self._validate_call(call)
         if error:
             if kind == 'schema':
@@ -133,7 +152,7 @@ class DecisionNodes:
             if str(value).strip().lower() == 'abort':
                 self.gate.abort()
             closing = self._cancel_queue(state, 'Operator stopped the pending task.')
-            return {**closing, 'status': 'idle', 'pending': None, 'route': 'end'}
+            return {**closing, 'status': 'stopped', 'pending': None, 'route': 'end'}
         segment = {}
         if pending['kind'] == 'limit':
             if str(value).strip().lower() not in ('continue', '继续'):

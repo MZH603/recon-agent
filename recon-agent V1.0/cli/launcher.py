@@ -16,7 +16,8 @@ from pydantic import BaseModel, Field, SecretStr
 from model.registry import ModelSpec, resolve_model
 from platforms.paths import get_config_dir
 from security.stealth import allowed_target
-from utils.config import optional_api_key
+from utils.config import Settings, optional_api_key
+from cli.setup_tools import TOOL_FIELDS, apply_tools_selection, valid_tools_fields
 
 LIMITS = {'api_base': 2048, 'model': 256, 'target': 2048, 'api_key': 4096}
 SETUP_FIELDS = {'type', 'api_base', 'model', 'target', 'api_key', 'authorized'}
@@ -27,6 +28,7 @@ ERRORS = {
     'target': '请输入有效且允许的域名/IP/URL/CIDR；自有内网实验目标需 --lab。',
     'api_key': '请输入本次使用的有效单行 API Key（最多 4096 字符）。',
     'authorized': '请明确确认已获本次目标的合法授权。',
+    'tools_config': '工具配置无法加载或选择无效，请检查 YAML、工具名称及文件路径；也可跳过扩展工具。',
 }
 
 
@@ -50,6 +52,7 @@ class SetupDefaults(BaseModel):
 class SetupResult(BaseModel):
     target: str
     connection: ModelSpec = Field(exclude=True, repr=False)
+    settings_override: Settings | None = Field(default=None, exclude=True, repr=False)
 
     def public(self):
         return {'api_base': self.connection.api_base, 'model': self.connection.model,
@@ -224,8 +227,11 @@ def valid_target(value, settings):
 
 def validate_setup(payload, defaults, settings):
     errors = {}
-    if not isinstance(payload, dict) or set(payload) != SETUP_FIELDS or payload.get('type') != 'configure':
+    if (not isinstance(payload, dict) or not SETUP_FIELDS.issubset(payload) or
+            set(payload) - SETUP_FIELDS - TOOL_FIELDS or payload.get('type') != 'configure'):
         return None, {'form': ERRORS['form']}
+    if not valid_tools_fields(payload):
+        errors['tools_config'] = ERRORS['tools_config']
     for field in LIMITS:
         if not valid_text(payload[field], field, empty=field == 'api_key'):
             errors[field] = ERRORS[field]
@@ -242,10 +248,16 @@ def validate_setup(payload, defaults, settings):
         errors['api_key'] = ERRORS['api_key']
     if errors:
         return None, errors
+    configured = None
+    if TOOL_FIELDS.intersection(payload):
+        try:
+            configured = apply_tools_selection(settings, payload['tools_config'], payload['selected_tools'])
+        except (OSError, ValueError, UnicodeError, RecursionError):
+            return None, {'tools_config': ERRORS['tools_config']}
     name = payload['model'].strip()
     connection = ModelSpec(model=name if '/' in name else 'openai/' + name,
                            api_base=payload['api_base'].strip().rstrip('/'), api_key=key)
-    return SetupResult(target=target, connection=connection), {}
+    return SetupResult(target=target, connection=connection, settings_override=configured), {}
 
 
 async def run_rich_setup(defaults, settings):
@@ -263,11 +275,33 @@ async def run_rich_setup(defaults, settings):
                 if answer == '/quit':
                     return None, 0
                 values[field] = answer or values[field]
+            from cli.setup_tools import EXAMPLE_PROFILE, inspect_tools
+            optional = {}
+            path = input('扩展工具配置 YAML（可选；留空跳过；/example 使用示例；/quit 退出）: ').strip()
+            if path == '/quit':
+                return None, 0
+            if path:
+                path = str(EXAMPLE_PROFILE) if path == '/example' else path
+                try:
+                    options = inspect_tools(settings, path)
+                    for index, row in enumerate(options['tools'], 1):
+                        console.print(f"{index}. {row['name']} ({row['kind']}, L{row['min_level']}, {row['status']})", markup=False)
+                    choice = input('启用工具编号（逗号分隔；留空不启用；/skip 跳过配置）: ').strip()
+                    if choice == '/quit':
+                        return None, 0
+                    if choice != '/skip':
+                        indexes = [] if not choice else [int(part.strip()) for part in choice.split(',')]
+                        if len(set(indexes)) != len(indexes) or any(not 1 <= index <= len(options['tools']) for index in indexes):
+                            raise ValueError('Invalid selection')
+                        optional = dict(tools_config=path, selected_tools=[options['tools'][index - 1]['id'] for index in indexes])
+                except (OSError, ValueError, UnicodeError, RecursionError):
+                    console.print(ERRORS['tools_config'], markup=False)
+                    continue
             # getpass refuses accidental pipe entry by the checks above.
             key = getpass.getpass('API Key（留空沿用已有 Key）: ' if defaults.api_key else 'API Key: ')
             authorized = input('确认已获本次目标合法授权？(yes/no): ').strip().lower() in ('yes', 'y', '确认')
             result, errors = validate_setup(dict(type='configure', **{k: values[k] for k in ('api_base', 'model', 'target')},
-                                                  api_key=key, authorized=authorized), defaults, settings)
+                                                  api_key=key, authorized=authorized, **optional), defaults, settings)
             key = ''
             if result:
                 return result, 0

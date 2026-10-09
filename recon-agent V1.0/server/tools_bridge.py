@@ -43,7 +43,7 @@ class MCPBridge:
     def tool_schemas(self) -> list[dict]:
         """MCP tools/list：OpenAI function spec → MCP 扁平格式（name/description/inputSchema）。"""
         schemas: list[dict] = []
-        for spec in self._registry().specs():
+        for spec in self._registry().specs(include_deferred=True):
             fn = spec["function"]
             schemas.append({
                 "name": fn["name"],
@@ -68,17 +68,20 @@ class MCPBridge:
             msg = (f"[范围拦截] target '{target or '(缺失)'}' 不在授权范围 "
                    f"{self._roots} 内；范围外资产仅可记录，禁止调用（HARD）")
             return msg, True
-        registry = self._registries.setdefault(
-            root, build_default(self._settings, self._gate, root)
-        )
+        registry = self._registry(root)
         result = await registry.execute(NormalizedToolCall(id=f"mcp-{name}", name=name,
                                                            arguments=arguments or {}))
         return self._render(result), not result.success
 
-    def _registry(self) -> ToolRegistry:
-        """仅用于导出 Schema 的注册表（Schema 与授权根域无关）。"""
-        return self._registries.setdefault(self._roots[0] if self._roots else "",
-                                           build_default(self._settings, self._gate, ""))
+    def _registry(self, root: str | None = None) -> ToolRegistry:
+        root = root if root is not None else (self._roots[0] if self._roots else "")
+        if root not in self._registries:
+            self._registries[root] = build_default(self._settings, self._gate, root)
+        return self._registries[root]
+
+    async def aclose(self) -> None:
+        for registry in self._registries.values():
+            await registry.aclose()
 
     @staticmethod
     def _render(result: ToolResult) -> str:

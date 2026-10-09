@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from platforms.sync_worker import run_sync
 import hashlib
 import ipaddress
 import re
@@ -77,13 +78,13 @@ class FingerprintTool(BaseTool):
         first_scheme = "http" if scheme_hint == "http" else "https"
         is_ip = _is_ip(host)
         async with self._limiter.slot():
-            status, headers, body = await asyncio.to_thread(
+            status, headers, body = await run_sync(
                 self._fetch, f"{first_scheme}://{netloc}/", insecure=is_ip)
         used_scheme = first_scheme
         if status == 0 and first_scheme == "https":  # https 失败不重试（HARD），http 兜底一次
             used_scheme = "http"
             async with self._limiter.slot():
-                status, headers, body = await asyncio.to_thread(self._fetch, f"http://{netloc}/")
+                status, headers, body = await run_sync(self._fetch, f"http://{netloc}/")
         if status == 0:
             return ToolResult.err(self.name, f"无法连接 {netloc}（失败不重试，HARD）")
         insecure_note = "，[证书校验跳过: IP 目标]" if is_ip and used_scheme == "https" else ""
@@ -116,13 +117,13 @@ class FingerprintTool(BaseTool):
         robots: list[str] = []
         sitemap: list[str] = []
         async with self._limiter.slot():
-            _, _, body = await asyncio.to_thread(self._fetch, f"{scheme}://{netloc}/robots.txt")
+            _, _, body = await run_sync(self._fetch, f"{scheme}://{netloc}/robots.txt")
         for line in body.splitlines()[:30]:
             if line.lower().startswith("disallow:"):
                 robots.append(line.split(":", 1)[1].strip())
         if robots:
             async with self._limiter.slot():
-                _, _, body2 = await asyncio.to_thread(self._fetch, f"{scheme}://{netloc}/sitemap.xml")
+                _, _, body2 = await run_sync(self._fetch, f"{scheme}://{netloc}/sitemap.xml")
             sitemap = re.findall(r"<loc>([^<]+)</loc>", body2)[:10]
         return robots[:10], sitemap
 

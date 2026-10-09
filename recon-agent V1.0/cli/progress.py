@@ -14,6 +14,11 @@ from rich.text import Text
 from rich.cells import cell_len
 
 
+CONTEXT_FIELDS = ('context_tokens', 'context_capacity', 'context_trigger_tokens',
+                  'context_before_tokens', 'context_saved_tokens', 'context_compactions',
+                  'context_compressed', 'context_limited', 'context_estimated')
+
+
 def safe_text(text: str) -> str:
     """Remove terminal escape sequences, including incomplete split sequences."""
     text = re.sub(r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)', '', str(text))
@@ -26,7 +31,7 @@ def safe_text(text: str) -> str:
 def visible_content(raw: str) -> str:
     """Withhold tag prefixes, tool protocol blocks and tagged reasoning across chunks."""
     visible, position, hidden = [], 0, None
-    reserved = ('tool_call', 'tool_calls', 'think', 'thinking', 'analysis', 'reasoning')
+    reserved = ('tool_call', 'tool_calls', 'think', 'thinking', 'analysis', 'reasoning', 'task_complete')
     reserved_tags = reserved + tuple('/' + tag for tag in reserved)
     while position < len(raw):
         if hidden:
@@ -46,7 +51,7 @@ def visible_content(raw: str) -> str:
         remainder = raw[opening + 1 + prefix.end():]
         possible = ((not remainder and any(tag.startswith(candidate) for tag in reserved_tags)) or
                     (candidate in reserved_tags and
-                     (not remainder or remainder[0].isspace() or remainder[0] == '>')))
+                     (not remainder or remainder[0].isspace() or remainder[0] in ('>','/'))))
         if not possible:
             # Ordinary comparisons/code may contain another reserved tag later.
             # Release only this '<' and keep scanning, rather than swallowing to '>'.
@@ -56,8 +61,8 @@ def visible_content(raw: str) -> str:
         end = raw.find('>', opening)
         if end < 0:
             break
-        tag = raw[opening + 1:end].strip().lower().split()[0] if raw[opening + 1:end].strip() else ''
-        if tag in reserved:
+        tag = raw[opening + 1:end].strip().lower().split()[0].rstrip('/') if raw[opening + 1:end].strip() else ''
+        if tag in reserved and tag != 'task_complete':
             hidden = tag
         elif tag not in reserved_tags:
             visible.append(raw[opening:end + 1])
@@ -242,11 +247,18 @@ class SessionProgress:
         self.label = '处理中'
 
     def was_shown(self, text):
-        return visible_content(text) in self.shown
+        return visible_content(text).strip() in {value.strip() for value in self.shown}
 
     def __call__(self, event):
         kind = event['kind']
-        if kind == 'model_start':
+        if kind == 'context':
+            self.label = '上下文超限，正在保存' if event.get('context_limited') else '上下文已准备，等待模型'
+            if event.get('context_compressed'):
+                self._note(f"上下文压缩: {event.get('context_before_tokens', 0):,} → "
+                           f"{event.get('context_tokens', 0):,} tokens · 节省 "
+                           f"{event.get('context_saved_tokens', 0):,} · "
+                           f"累计 {event.get('context_compactions', 0)} 次")
+        elif kind == 'model_start':
             self._end_model(success=True)
             self.slots = {}
             self.active_key = None
@@ -285,15 +297,24 @@ class SessionProgress:
             self.label, self.started = f"工具 {safe_text(event['name'])} 执行中", monotonic()
             self._note(self.label)
         elif kind == 'tool_end':
-            outcome = '成功' if event.get('success') else '失败/中断'
+            result = event.get('result',{})
+            outcome = {'timeout':'超时','cancelled':'已取消','partial':'部分成功'}.get(result.get('status'), '成功' if event.get('success') else '失败')
             self._note(f"工具 {event['name']} {outcome} · {event.get('elapsed', 0):.1f}s")
+            if result.get('summary'): self._note(result['summary'])
+            for artifact in result.get('artifacts',[]): self._note('产物: '+str(artifact.get('path','')))
             self.label = '处理中'
+        elif kind == 'tool_wait':
+            self.label=f"等待工具 {safe_text(event['name'])} 返回 · {event.get('elapsed_seconds',0):.0f}s / {event.get('timeout_seconds',0):g}s"
+        elif kind == 'tool_cancelled':
+            self.label='工具已取消，正在保存状态'
         elif kind in ('retry', 'fallback'):
             self.label = '模型重试中' if kind == 'retry' else '切换备用模型'
             self._note(self.label)
         elif kind == 'plan':
             self._note('计划: ' + event['text'])
         elif kind == 'pause':
-            self.label = '等待回复'
+            pending_kind = (event.get('pending') or {}).get('kind')
+            self.label = {'context_limit': '上下文超限，等待调整',
+                          'budget': '费用预算暂停'}.get(pending_kind, '等待回复')
         if self.live and self.live.is_started:
             self.live.refresh()

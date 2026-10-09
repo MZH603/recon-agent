@@ -1,0 +1,93 @@
+# 全部示例默认关闭。复制后填写本机路径，再启用需要的连接器。
+custom_tools:
+  - name: curl_headers
+    kind: command
+    description: 使用本机 curl 读取授权目标 HTTPS 响应头
+    enabled: false
+    command: [curl, --head, --max-time, '10', 'https://{target}']
+    timeout_seconds: 15
+    max_output_bytes: 50000
+    response_format: text
+    deferred: true
+
+  - name: summarize_input
+    kind: script
+    description: 离线演示脚本输入与 JSON 结构化输出
+    enabled: false
+    script: |
+      import json
+      print(json.dumps(RECON_INPUT, ensure_ascii=False))
+    response_format: json
+
+  - name: api_metadata
+    kind: http
+    description: 读取授权目标公开 JSON 元数据
+    enabled: false
+    url: 'https://{target}/api/{resource}'
+    method: GET
+    input_schema:
+      type: object
+      properties:
+        resource: {type: string, enum: [version, status]}
+      required: [resource]
+      additionalProperties: false
+    # Authorization 请求头从环境读取，变量值不写在 YAML 中。
+    # headers_env: {Authorization: RECON_TARGET_AUTHORIZATION}
+    response_format: json
+
+  - name: manual_headers
+    kind: shell
+    description: 提供人工执行的响应头命令提示
+    enabled: false
+    command: [curl, --head, 'https://{target}']
+
+mcp_servers:
+  - name: browser
+    enabled: false
+    transport: stdio
+    command: node
+    args: ['C:/replace/with/node_modules/@playwright/mcp/cli.js', --headless, --isolated]
+    timeout_seconds: 30
+    max_output_bytes: 200000
+    allowed_tools: [browser_navigate, browser_snapshot, browser_network_requests, browser_close]
+    target_fields:
+      browser_navigate: [url]
+      browser_snapshot: []
+      browser_network_requests: []
+      browser_close: []
+    deferred: true
+
+# HTTP 服务示例（需自行准备服务器）：
+# - name: local_mcp
+#   enabled: true
+#   transport: http  # 传统 SSE 服务改为 sse 并填写 SSE 入口
+#   url: http://127.0.0.1:8931/mcp
+#   headers_env: {Authorization: RECON_MCP_AUTHORIZATION}
+#   allowed_tools: [inspect]
+#   target_fields: {inspect: [url]}
+
+API_RECON_MAX_REQUESTS: 8
+API_RECON_MAX_ASSET_BYTES: 100000
+API_RECON_TIMEOUT_SECONDS: 30
+# TOOL_EVIDENCE_DIR: 'D:/recon-evidence'
+
+# 原生扩展工具适配。全部外部能力默认关闭；离线记录/知识内置可用。
+extension_tools:
+  scanners:
+    - {kind: subfinder, enabled: false, executable: subfinder, timeout_seconds: 60}
+    - {kind: katana, enabled: false, executable: katana, timeout_seconds: 60}
+    - {kind: ffuf, enabled: false, executable: ffuf, timeout_seconds: 60}
+    - {kind: naabu, enabled: false, executable: naabu, timeout_seconds: 60}
+    - kind: nuclei
+      enabled: false
+      executable: nuclei
+      timeout_seconds: 60
+      templates: [tools/data/nuclei-readonly-status.yaml]
+  search:
+    enabled: false
+    provider: exa
+    api_key_env: EXA_API_KEY
+  caido:
+    enabled: false
+    url: http://127.0.0.1:48080
+    token_env: CAIDO_TOKEN

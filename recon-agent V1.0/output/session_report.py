@@ -8,18 +8,26 @@ from output.report import save_report, INCOMPLETE_WATERMARK, DEGRADED_WATERMARK
 from output.report_builder import ReportBuilder
 from tools.base import ToolResult
 from tools.builtin.dns_query import RTYPE_CODES
+from output.tool_report import WORKSPACE_TOOLS, apply_tool_report
 
 DNS_TYPES = {code: name for name, code in RTYPE_CODES.items()}
 
 
 def _observations(state):
-    results = list(state.get('results', []))
-    known = {r.get('execution_id') for r in results if r.get('execution_id')}
+    current = list(state.get('results', []))
+    by_id = {r['execution_id']: r for r in current if r.get('execution_id')}
+    results, known = [], set()
+    # The durable journal spans tasks; the current task's result list may be reset.
+    # Preserve journal chronology before appending results not yet journaled.
     for entry in state.get('executions', []):
-        if entry.get('result') and entry.get('execution_id') not in known:
-            results.append({**entry['result'], 'execution_id': entry['execution_id'],
+        identifier = entry.get('execution_id')
+        value = by_id.get(identifier) or entry.get('result')
+        if value and identifier not in known:
+            results.append({**value, 'execution_id': identifier,
                             'target': entry.get('target') or state['target'],
                             'arguments': entry.get('arguments', {})})
+            known.add(identifier)
+    results.extend(r for r in current if not r.get('execution_id') or r['execution_id'] not in known)
     return results
 
 
@@ -81,10 +89,19 @@ def build_session_report(state, level):
             builder.add_dir_enum(host, result)
         elif name == 'script_probe':
             builder.add_script_probe(host, result)
+        elif name == 'api_recon':
+            data.api_endpoints.extend(item.get('endpoints', []))
+            data.frontend_routes.extend(item.get('frontend_routes', []))
+            data.doubts.extend(f'{name}: {note}' for note in item.get('limitations', []))
         elif name == 'takeover_check':
             data.doubts.append(f'{host}: 接管候选（需人工复核） {json.dumps(item, ensure_ascii=False)}')
+        elif name in WORKSPACE_TOOLS:
+            pass  # Current records are loaded once from the final verified snapshot.
         else:
             data.notes.append(f'{name} {host}: {json.dumps(item, ensure_ascii=False)}')
+    apply_tool_report(data, results, state.get('session_id', ''))
+    data.api_endpoints = list({json.dumps(e, sort_keys=True, ensure_ascii=False): e for e in data.api_endpoints}.values())
+    data.frontend_routes = list(dict.fromkeys(data.frontend_routes))
     data.subdomains = sorted(set(data.subdomains))
     data.alive_hosts = sorted(set(data.alive_hosts))
     data.ips = sorted(set(data.ips))
@@ -93,16 +110,23 @@ def build_session_report(state, level):
                        for c in state.get('conflicts', []))
     for event in state.get('events', []):
         data.notes.append('会话事件: ' + json.dumps(event, ensure_ascii=False))
-    uncertain = [e for e in state.get('executions', []) if e.get('status') != 'completed']
+    uncertain = [e for e in state.get('executions', []) if e.get('status') != 'completed' or (e.get('result') or {}).get('outcome_unknown')]
     for entry in uncertain:
         data.doubts.append('uncertain/未完成执行，未自动重试: ' + json.dumps(entry, ensure_ascii=False))
     unknown = state.get('cost_unknown_calls', 0)
     data.notes.append(f"模型 tokens={state.get('used_tokens', 0)}; 已知费用 USD {state.get('used_cost', 0):.6f}" +
                       (f'; 费用未知 {unknown} 次，无法证明总费用精确上限' if unknown else ''))
+    data.notes.append(f"任务 {state.get('task_id','')} · 当前上下文约 {state.get('context_tokens',0)}/{state.get('context_capacity',0)} tokens · "
+        f"压缩 {state.get('context_compactions',0)} 次 · "
+        f"会话累计 {state.get('session_used_tokens',state.get('used_tokens',0))} tokens / USD {state.get('session_used_cost',state.get('used_cost',0)):.6f} · "
+        f"用量估算 {state.get('usage_estimated_calls',0)} 次")
+    for result in results:
+        for artifact in result.get('artifacts',[]):
+            data.raw_refs.append(str(artifact.get('path','')))
     if state.get('answer'):
         data.llm_analysis = '模型分析（未验证，不能视为已确认发现）:\n\n' + state['answer']
     marks = []
-    if state.get('status') != 'completed' or uncertain or any(not r['success'] for r in results):
+    if state.get('status') != 'completed' or uncertain:
         marks.append(INCOMPLETE_WATERMARK)
     if data.degraded:
         marks.append(DEGRADED_WATERMARK)
@@ -110,7 +134,13 @@ def build_session_report(state, level):
         model_calls=state.get('decisions', 0), scan_level_reached=level,
         contradiction_count=len(state.get('conflicts', [])), uncertainty_count=len(data.doubts),
         total_cost_usd=state.get('used_cost', 0),
-        extra={'used_tokens': state.get('used_tokens', 0), 'cost_unknown_calls': unknown})
+        extra={'used_tokens': state.get('used_tokens', 0), 'cost_unknown_calls': unknown,
+            'task_id':state.get('task_id',''),'session_used_tokens':state.get('session_used_tokens',0),
+            'session_used_cost':state.get('session_used_cost',0),
+            **{key:state.get(key,0) for key in ('context_tokens','context_capacity','context_trigger_tokens',
+                'context_before_tokens','context_saved_tokens','context_compactions','context_compressed',
+                'context_limited','context_estimated')},
+            'max_cost':state.get('max_cost',0),'usage_estimated_calls':state.get('usage_estimated_calls',0)})
     return data, metrics, marks, results
 
 

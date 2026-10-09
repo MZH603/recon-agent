@@ -1,4 +1,6 @@
 # recon-agent 默认配置（HARD：所有阈值集中在 utils/config.py，此处仅模型与运行覆盖项）
+CONTEXT_BUDGET: 100000         # 当前请求上下文容量，不是累计 token 预算
+COMPACT_TRIGGER_RATIO: 0.70   # 达到约 70000 tokens 自动压缩
 model:
   # 主模型可用 RECON_MODEL / RECON_API_BASE / RECON_API_KEY 覆盖；非空生效，不影响 fallback。
   provider: litellm

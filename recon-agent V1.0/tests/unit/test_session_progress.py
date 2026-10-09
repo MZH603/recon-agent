@@ -15,6 +15,38 @@ def renderer(tty=False):
                            is_tty=tty), output
 
 
+def test_rich_context_compaction_progress_and_limit_labels():
+    progress, out = renderer()
+    progress({'kind': 'context', 'context_tokens': 45000, 'context_capacity': 100000,
+              'context_before_tokens': 78000, 'context_saved_tokens': 33000,
+              'context_compactions': 2, 'context_compressed': True, 'context_estimated': True})
+    value = out.getvalue()
+    assert '上下文压缩' in value and '78,000' in value and '45,000' in value and '33,000' in value
+    assert '2 次' in value
+    progress({'kind': 'pause', 'pending': {'kind': 'context_limit'}})
+    assert progress.label == '上下文超限，等待调整'
+    progress({'kind': 'pause', 'pending': {'kind': 'budget'}})
+    assert progress.label == '费用预算暂停'
+
+
+def test_rich_state_reports_context_without_cumulative_usage_or_amounts(monkeypatch):
+    from cli.session import show_state
+    from gate.scan_gate import ScanGate
+    lines = []
+    monkeypatch.setattr('cli.session.info', lines.append)
+    show_state({'status': 'running', 'used_tokens': 900000, 'max_tokens': 10000,
+                'session_used_tokens': 1500000, 'used_cost': .25, 'max_cost': 2,
+                'context_tokens': 20000, 'context_capacity': 100000, 'context_trigger_tokens': 70000,
+                'context_compactions': 0, 'context_estimated': True,
+                'usage_estimated_calls': 3, 'cost_unknown_calls': 2}, ScanGate('example.com'))
+    value = '\n'.join(lines)
+    assert '20,000/100,000' in value and '20%' in value and '70,000' in value
+    assert '会话累计消耗' not in value and '1500000' not in value
+    assert '费用预算' not in value and 'USD' not in value
+    assert '用量包含估算' not in value and '已知费用' not in value
+    assert '900000/10000' not in value
+
+
 def test_plain_incremental_text_is_visible_before_end_no_ansi_and_no_duplicate():
     progress, out=renderer()
     with progress:
@@ -242,8 +274,12 @@ def test_cli_native_question_and_answer_are_visible_before_final_and_deduplicate
             raise AssertionError('stream bridge must be used')
         async def complete_stream(self, messages, tools, on_delta):
             self.calls += 1
-            name, field, first, second = ('ask_user','question','Which ','topic?') if self.calls==1 else (
-                'finish_task','answer','DNS ','explained')
+            if self.calls>1:
+                on_delta(StreamEvent('content',content='DNS '))
+                assert 'DNS ' in output.getvalue()
+                on_delta(StreamEvent('content',content='explained\n<task_complete/>'))
+                return LLMResponse(content='DNS explained\n<task_complete/>')
+            name, field, first, second = ('ask_user','question','Which ','topic?')
             on_delta(StreamEvent('tool', name=name, arguments='{"'+field+'":"'+first))
             assert first in output.getvalue(), 'control text must appear before final response'
             await asyncio.sleep(0)

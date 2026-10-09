@@ -34,6 +34,12 @@ class ReconData:
     notes: list[str] = field(default_factory=list)      # 显式失败/说明
     tech_cards: list[dict] = field(default_factory=list)
     risk_paths: list[dict] = field(default_factory=list)  # L2 枚举命中（{target,path,status,note}）
+    api_endpoints: list[dict] = field(default_factory=list)
+    frontend_routes: list[str] = field(default_factory=list)
+    findings: list[dict] = field(default_factory=list)
+    coverage: list[dict] = field(default_factory=list)
+    workspace_notes: list[dict] = field(default_factory=list)
+    threat_models: list[dict] = field(default_factory=list)
     cves: list[dict] = field(default_factory=list)
     doubts: list[str] = field(default_factory=list)     # 存疑清单
     degraded: list[str] = field(default_factory=list)   # 降级清单
@@ -73,6 +79,35 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
             lines.append(f"| {rp.get('target')} | {rp.get('path')} | {rp.get('status')} |"
                          f" {rp.get('severity', '—')} | {rp.get('note')} |")
         lines.append("")
+    if data.api_endpoints:
+        lines += ["### JS/API 端点（静态候选与运行时观测）", "",
+                  "| 方法 | 路径 | 参数线索 | 状态 | 来源 |", "|---|---|---|---|---|"]
+        for endpoint in data.api_endpoints:
+            status = "已观测请求（未证明可访问）" if endpoint.get('observed') else "候选（未验证）"
+            cells = [endpoint.get('method') or '未知', endpoint.get('path', ''),
+                     ', '.join(map(str, endpoint.get('params') or [])), status, endpoint.get('source', '')]
+            lines.append('| ' + ' | '.join(_table_cell(cell) for cell in cells) + ' |')
+        lines.append('')
+    if data.frontend_routes:
+        lines += ["### 前端路由线索", ""]
+        lines += ['- ' + _table_cell(route) for route in data.frontend_routes] + ['']
+    if data.findings:
+        labels = {'candidate': '候选（未验证）', 'observed': '已观测（待复核）', 'verified': '验证声明（证据仍需复核）'}
+        lines += ['### 发现记录', '', '| 标题 | 级别 | 状态 | 证据/来源 |', '|---|---|---|---|']
+        for item in data.findings:
+            values = [item.get('title', item.get('url', '')), item.get('severity', 'info'),
+                labels.get(item.get('status'), '候选（未验证）'), ', '.join(item.get('evidence_ids', [])) or item.get('source', '')]
+            lines.append('| ' + ' | '.join(_table_cell(v) for v in values) + ' |')
+        lines.append('')
+    if data.coverage:
+        lines += ['### 覆盖记录', '', '| 面 | 风险类别 | 结果 | 说明 |', '|---|---|---|---|']
+        for item in data.coverage:
+            lines.append('| ' + ' | '.join(_table_cell(item.get(key, '')) for key in ('surface', 'risk_area', 'outcome', 'content')) + ' |')
+        lines.append('')
+    for title, records in (('会话笔记', data.workspace_notes), ('威胁模型', data.threat_models)):
+        if records:
+            lines += ['### ' + title, '']
+            lines += ['- ' + _table_cell(item.get('title', '')) + ': ' + _table_cell(item.get('content', '')) for item in records] + ['']
     lines += ["## 5. 关联资产拓线图", "", "```mermaid", "graph TD"]
     lines.append(f'  T["{data.target}"]')
     tech_by_host: dict[str, str] = {}
@@ -119,6 +154,10 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
         lines += ["## 附: 采集备注（显式失败记录，未做推测填补）", ""]
         lines += [f"- {n}" for n in data.notes] + [""]
     return "\n".join(lines)
+
+
+def _table_cell(value) -> str:
+    return str(value).replace('\n', ' ').replace('\r', ' ').replace('|', r'\|').replace('`', r'\`')
 
 
 def _tech_card_md(card: dict) -> str:
@@ -178,4 +217,12 @@ def save_report(
         for card in data.tech_cards:
             techs = ";".join(f"{k}={v['name']}" for k, v in (card.get("tech") or {}).items())
             writer.writerow(["tech", card.get("host", ""), techs])
+        for endpoint in data.api_endpoints:
+            writer.writerow(['api_endpoint', endpoint.get('path', ''), json.dumps(endpoint, ensure_ascii=False)])
+        for route in data.frontend_routes:
+            writer.writerow(['frontend_route', route, '静态路由线索（未验证）'])
+        for kind, records in (('finding', data.findings), ('coverage', data.coverage),
+                              ('workspace_note', data.workspace_notes), ('threat_model', data.threat_models)):
+            for item in records:
+                writer.writerow([kind, item.get('title') or item.get('surface', ''), json.dumps(item, ensure_ascii=False)])
     return {"markdown": md_path, "json": json_path, "csv": csv_path}

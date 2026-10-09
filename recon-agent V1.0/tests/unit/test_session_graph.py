@@ -1,6 +1,5 @@
 """Offline contracts for the checkpointed session runtime."""
 import asyncio
-import importlib.util
 from langgraph.errors import NodeCancelledError
 
 from pydantic import BaseModel
@@ -11,10 +10,6 @@ from model.base import LLMResponse, NormalizedToolCall, ModelUnavailable
 from tools.base import BaseTool, ToolResult
 from tools.registry import ToolRegistry
 from utils.config import Settings
-
-
-def test_runtime_is_available():
-    assert importlib.util.find_spec('core.orchestration') is not None
 
 
 class Params(BaseModel):
@@ -84,15 +79,16 @@ def test_idle_startup_makes_no_calls(tmp_path):
 def test_full_results_and_conversation_are_checkpointed(tmp_path):
     async def scenario():
         llm = ScriptedLLM(response('fixture', {'target': 'example.com'}),
-                          response('finish_task', {'answer': 'Observed fixture', 'evidence': ['fixture://source']}))
+                          LLMResponse(content='Observed fixture\n<task_complete/>'))
         runtime, tool, _ = fixture(tmp_path, llm)
         async with runtime:
             state = await runtime.submit('Inspect fixture')
             assert state['status'] == 'completed'
             assert state['results'][0]['data'] == {'hosts': ['fixture']}
             assert state['results'][0]['source_hash'] == 'abc'
-            assert llm.messages[1][1]['tool_calls'][0]['id'] == 'call'
-            assert llm.messages[1][2]['role'] == 'tool'
+            batch = [m for m in llm.messages[1] if m['role'] != 'system']
+            assert batch[1]['tool_calls'][0]['id'] == 'call'
+            assert batch[2]['role'] == 'tool'
         restored, _, _ = fixture(tmp_path, ScriptedLLM())
         async with restored:
             assert (await restored.state())['results'] == state['results']
@@ -168,14 +164,15 @@ def test_duplicate_reuses_full_result_with_cache_flag(tmp_path):
     asyncio.run(scenario())
 
 
-def test_plain_model_output_and_unsupported_finish_pause(tmp_path):
+def test_plain_output_continues_and_old_finish_is_not_model_visible(tmp_path):
+    from core.orchestration.controls import control_specs
+    assert 'finish_task' not in {spec['function']['name'] for spec in control_specs()}
     async def scenario():
-        for llm in (ScriptedLLM(LLMResponse(content='All secure')),
-                    ScriptedLLM(response('finish_task', {'answer': 'All secure', 'evidence': ['invented']}))):
-            runtime, tool, _ = fixture(tmp_path / str(id(llm)), llm)
-            async with runtime:
-                state = await runtime.submit('Inspect')
-                assert state['status'] == 'paused' and state['answer'] == '' and tool.calls == 0
+        runtime, tool, _ = fixture(tmp_path, ScriptedLLM(LLMResponse(content='Working'),
+                                  LLMResponse(content='Answer\n<task_complete/>')))
+        async with runtime:
+            state = await runtime.submit('Explain')
+            assert state['status'] == 'completed' and tool.calls == 0
     asyncio.run(scenario())
 
 
@@ -184,11 +181,11 @@ def test_model_outage_and_failed_tool_pause(tmp_path):
         runtime, _, _ = fixture(tmp_path / 'outage', ScriptedLLM(ModelUnavailable('offline')))
         async with runtime:
             assert (await runtime.submit('Inspect'))['pending']['kind'] == 'model_unavailable'
-        runtime, tool, _ = fixture(tmp_path / 'failed', ScriptedLLM(response('fixture', {'target': 'example.com'})),
+        runtime, tool, _ = fixture(tmp_path / 'failed', ScriptedLLM(response('fixture', {'target': 'example.com'}), LLMResponse(content='Failure explained\n<task_complete/>')),
                                   result=ToolResult.err('fixture', 'failed'))
         async with runtime:
             state = await runtime.submit('Inspect')
-            assert state['pending']['kind'] == 'tool_failure' and tool.calls == 1
+            assert state['status'] == 'completed' and tool.calls == 1
     asyncio.run(scenario())
 
 
@@ -213,7 +210,7 @@ def test_journal_uncertain_requires_explicit_retry_or_skip(tmp_path):
             state = await runtime.submit('Inspect')
             assert state['pending']['kind'] == 'uncertain' and tool.calls == 0
             state = await runtime.resume('skip')
-            assert tool.calls == 0 and state['pending']['kind'] == 'tool_failure'
+            assert tool.calls == 0 and state['pending']['kind'] == 'ask_user'
     asyncio.run(scenario())
 
 
@@ -246,18 +243,19 @@ def test_real_queue_stops_at_action_limit_and_can_continue(tmp_path):
             assert state['results'][1]['arguments'] == {'target': 'b.example.com'}
             assert state['results'][1]['min_level'] == 0
             assert [m['tool_call_id'] for m in llm.messages[1] if m['role'] == 'tool'] == ['one', 'two']
-            assert [m['role'] for m in llm.messages[1]][1:4] == ['assistant', 'tool', 'tool']
+            assert [m['role'] for m in llm.messages[1] if m['role'] != 'system'][1:4] == ['assistant', 'tool', 'tool']
     asyncio.run(scenario())
 
 
 def test_explicit_next_task_can_refresh_completed_results(tmp_path):
     async def scenario():
         llm = ScriptedLLM(response('fixture', {'target': 'example.com'}),
-                          response('finish_task', {'answer': 'Observed fixture', 'evidence': ['fixture://source']}),
+                          LLMResponse(content='Observed fixture\n<task_complete/>'),
                           response('fixture', {'target': 'example.com'}), response('ask_user', {'question': 'Next?'}))
         runtime, tool, _ = fixture(tmp_path, llm)
         async with runtime:
             first = await runtime.submit('Inspect')
+            await runtime.new_task()
             second = await runtime.submit('Refresh the observation')
             assert tool.calls == 2 and first['task_id'] != second['task_id']
     asyncio.run(scenario())
@@ -317,7 +315,7 @@ def test_real_crash_started_checkpoint_rechecks_auth_and_stop_is_safe(tmp_path):
         stopped, tool, gate = fixture(tmp_path, ScriptedLLM(), level=1)
         async with stopped:
             state = await stopped.resume('Stop')
-            assert state['status'] == 'idle' and tool.calls == 0 and gate.current_level() == 0
+            assert state['status'] == 'stopped' and tool.calls == 0 and gate.current_level() == 0
     asyncio.run(scenario())
 
 
@@ -364,21 +362,21 @@ def test_conflicting_version_evidence_pauses_and_keeps_both(tmp_path):
 
 def test_clarification_only_completion_marks_no_evidence(tmp_path):
     async def scenario():
-        runtime, _, _ = fixture(tmp_path, ScriptedLLM(response('finish_task', {'answer': 'Task clarified', 'clarification_only': True})))
+        runtime, _, _ = fixture(tmp_path, ScriptedLLM(LLMResponse(content='Task clarified\n<task_complete/>')))
         async with runtime:
             state = await runtime.submit('Clarify the task without scanning')
-            assert state['status'] == 'completed' and '[无证据]' in state['answer']
+            assert state['status'] == 'completed' and state['answer'] == 'Task clarified'
     asyncio.run(scenario())
 
 
 
-def test_stop_api_persists_idle_without_external_calls(tmp_path):
+def test_stop_api_persists_stopped_without_external_calls(tmp_path):
     async def scenario():
         runtime, tool, gate = fixture(tmp_path, ScriptedLLM(response('fixture', {'target': 'example.com'})), level=2)
         async with runtime:
             await runtime.submit('Inspect')
             state = await runtime.stop(abort=True)
-            assert state['status'] == 'idle' and not state['pending'] and not state['queued_calls']
+            assert state['status'] == 'stopped' and not state['pending'] and not state['queued_calls']
             assert gate.current_level() == 0 and tool.calls == 0
             assert state['messages'][-1]['role'] == 'tool'
     asyncio.run(scenario())
@@ -459,7 +457,7 @@ def test_new_task_resets_schema_correction_allowance(tmp_path):
     asyncio.run(scenario())
 
 
-def test_failure_replan_cancels_remaining_native_calls(tmp_path):
+def test_failure_returns_model_after_native_batch(tmp_path):
     async def scenario():
         llm = ScriptedLLM(LLMResponse(tool_calls=[
             NormalizedToolCall(id='one', name='fixture', arguments={'target': 'a.example.com'}),
@@ -467,10 +465,9 @@ def test_failure_replan_cancels_remaining_native_calls(tmp_path):
             response('ask_user', {'question': 'New focus?'}))
         runtime, tool, _ = fixture(tmp_path, llm, result=ToolResult.err('fixture', 'failed'))
         async with runtime:
-            await runtime.submit('Inspect')
-            state = await runtime.resume('Change focus to reviewing the evidence')
-            assert tool.calls == 1 and state['pending']['kind'] == 'ask_user'
-            assert [m['role'] for m in llm.messages[1]][1:5] == ['assistant', 'tool', 'tool', 'user']
+            state = await runtime.submit('Inspect')
+            assert tool.calls == 2 and state['pending']['kind'] == 'ask_user'
+            assert [m['role'] for m in llm.messages[1] if m['role'] != 'system'][1:4] == ['assistant', 'tool', 'tool']
     asyncio.run(scenario())
 
 
@@ -478,7 +475,7 @@ def test_xml_declared_arrays_are_decoded_for_controls(tmp_path):
     async def scenario():
         runtime, _, _ = fixture(tmp_path / 'finish', ScriptedLLM(
             response('fixture', {'target': 'example.com'}),
-            LLMResponse(content='<tool_call><tool_name>finish_task</tool_name><parameters><answer>Observed fixture</answer><evidence>["fixture://source"]</evidence></parameters></tool_call>')))
+            LLMResponse(content='Observed fixture\n<task_complete/>')))
         async with runtime:
             assert (await runtime.submit('Inspect'))['status'] == 'completed'
         runtime, _, _ = fixture(tmp_path / 'ask', ScriptedLLM(
@@ -514,18 +511,19 @@ def test_started_journal_is_exported_for_partial_reports(tmp_path):
     asyncio.run(scenario())
 
 
-def test_uncertain_invalid_reply_then_skip_resolves_journal(tmp_path):
+def test_uncertain_invalid_reply_then_skip_preserves_unknown_journal(tmp_path):
     async def scenario():
-        runtime, tool, _ = fixture(tmp_path, ScriptedLLM(response('fixture', {'target': 'example.com'})))
+        runtime, tool, _ = fixture(tmp_path, ScriptedLLM(response('fixture', {'target': 'example.com'}), response('ask_user', {'question': 'Next?'})))
         async with runtime:
             await runtime.store.start('test', 'old', 'fixture', {'target': 'example.com'})
             await runtime.submit('Inspect')
             state = await runtime.resume('what?')
             assert state['pending']['kind'] == 'uncertain'
             state = await runtime.resume('skip')
-            assert state['pending']['kind'] == 'tool_failure' and tool.calls == 0
-            assert state['executions'][0]['status'] == 'completed'
-            assert 'skipped' in state['executions'][0]['result']['error']
+            assert state['pending']['kind'] == 'ask_user' and tool.calls == 0
+            assert state['executions'][0]['status'] == 'uncertain'
+            previous = await runtime.store.lookup('test', 'later', 'fixture', {'target':'example.com'})
+            assert previous['status'] == 'started'
     asyncio.run(scenario())
 
 
@@ -539,7 +537,8 @@ def test_uncertain_invalid_reply_then_retry_executes_once(tmp_path):
             state = await runtime.resume('retry')
             assert tool.calls == 1 and state['pending']['kind'] == 'ask_user'
             assert len(state['executions']) == 2
-            assert all(item['status'] == 'completed' for item in state['executions'])
+            assert state['executions'][0]['status'] == 'uncertain'
+            assert state['executions'][1]['status'] == 'completed'
     asyncio.run(scenario())
 
 
@@ -715,3 +714,122 @@ def test_concurrent_enter_same_runtime_keeps_original_owner(tmp_path):
             await entering
             await runtime.__aexit__(None, None, None)
     asyncio.run(scenario())
+
+
+def test_xml_completion_only_final_body_line_and_followup_keeps_task(tmp_path):
+    async def scenario():
+        llm = ScriptedLLM(LLMResponse(content="```xml\n<task_complete/>\n```"),
+                          LLMResponse(content="Answer\n<task_complete/>"),
+                          LLMResponse(content="Follow-up\n<task_complete/>"))
+        runtime, _, _ = fixture(tmp_path, llm)
+        async with runtime:
+            first = await runtime.submit('Explain')
+            assert first['status'] == 'completed' and first['answer'] == 'Answer'
+            assert llm.calls == 2
+            second = await runtime.submit('Explain more')
+            assert second['task_id'] == first['task_id']
+            assert second['answer'] == 'Follow-up'
+    asyncio.run(scenario())
+
+
+def test_task_budget_addition_and_new_task_preserve_session_usage(tmp_path):
+    async def scenario():
+        paid = LLMResponse(content='Need more', token_usage={'input': 6, 'output': 4, 'cost': 0.2})
+        llm = ScriptedLLM(paid, LLMResponse(content='Done\n<task_complete/>', token_usage={'input': 1, 'output': 1, 'cost': 0.1}))
+        runtime, _, _ = fixture(tmp_path, llm, settings=Settings(MAX_TOKENS_PER_TASK=10, MAX_COST_PER_TASK=0.2))
+        async with runtime:
+            paused = await runtime.submit('Explain')
+            assert paused['pending']['kind'] == 'budget' and paused['used_tokens'] == 10
+            topped = await runtime.add_budget(cost=0.2)
+            assert topped['max_tokens'] == 0 and topped['max_cost'] == 0.4 and topped['used_tokens'] == 10
+            done = await runtime.resume('Continue')
+            assert done['status'] == 'completed' and done['used_tokens'] == 12
+            fresh = await runtime.new_task()
+            assert fresh['task_id'] != done['task_id'] and fresh['used_tokens'] == 0
+            assert fresh['session_used_tokens'] == 12 and fresh['max_tokens'] == 0
+            assert fresh['max_cost'] == 0.2 and abs(fresh['session_used_cost'] - 0.3) < 1e-12
+            assert not fresh['results'] and fresh['status'] == 'idle'
+        restored, _, _ = fixture(tmp_path, ScriptedLLM(), settings=Settings(MAX_TOKENS_PER_TASK=10, MAX_COST_PER_TASK=0.2))
+        async with restored:
+            state = await restored.state()
+            assert state['used_tokens'] == 0 and state['session_used_tokens'] == 12
+    asyncio.run(scenario())
+
+
+def test_soft_budget_does_not_block_authorized_tools():
+    guard = BudgetGuard(max_cost=100, used_cost=85)
+    assert guard.allows(2) and guard.allows(1)
+
+
+def test_marker_with_native_calls_waits_for_following_completion(tmp_path):
+    async def scenario():
+        llm = ScriptedLLM(LLMResponse(content='Proceed\n<task_complete/>', tool_calls=[
+            NormalizedToolCall(id='tool', name='fixture', arguments={'target': 'example.com'})]),
+            LLMResponse(content='Finished\n<task_complete/>'))
+        runtime, tool, _ = fixture(tmp_path, llm)
+        async with runtime:
+            state = await runtime.submit('Inspect')
+            assert state['status'] == 'completed' and llm.calls == 2 and tool.calls == 1
+            assert state['answer'] == 'Finished'
+    asyncio.run(scenario())
+
+
+def test_unknown_timeout_survives_new_task_and_archive_keeps_completion(tmp_path):
+    import json
+    async def scenario():
+        runtime, _, _ = fixture(tmp_path, ScriptedLLM(LLMResponse(content='Done\n<task_complete/>')))
+        async with runtime:
+            done = await runtime.submit('Explain')
+            await runtime.store.start('test', 'late', 'fixture', {'target': 'example.com'}, done['task_id'])
+            timeout = ToolResult(name='fixture', success=False, status='timeout', outcome_unknown=True).model_dump()
+            await runtime.store.complete('test', 'late', timeout)
+            fresh = await runtime.new_task()
+            found = await runtime.store.lookup('test', 'new', 'fixture', {'target': 'example.com'}, fresh['task_id'])
+            assert found['status'] == 'started' and found['result']['outcome_unknown']
+            async with runtime.store.connection.execute('SELECT state FROM task_archive WHERE task_id=?', (done['task_id'],)) as cursor:
+                archived = json.loads((await cursor.fetchone())[0])
+            assert archived['status'] == 'completed' and archived['answer'] == 'Done'
+    asyncio.run(scenario())
+
+
+def test_compact_context_preserves_goal_recent_input_and_tool_pairs():
+    from core.orchestration.model_context import model_messages
+    from types import SimpleNamespace
+    history = [{'role': 'system', 'content': 'main'}, {'role': 'user', 'content': 'goal'}]
+    for index in range(12):
+        history += [{'role': 'assistant', 'content': 'old ' * 1000, 'tool_calls': [{'id': str(index)}]},
+                    {'role': 'tool', 'tool_call_id': str(index), 'content': 'result ' * 1000}]
+    history += [{'role': 'user', 'content': 'latest instruction'}]
+    state = {'messages': history, 'task_goal': 'goal', 'plan': 'plan', 'target': 'example.com', 'results': []}
+    request = model_messages(state, SimpleNamespace(current_level=lambda: 1), BudgetGuard(), 1000)
+    assert len(request) < len(history)
+    assert request[-1]['content'] == 'latest instruction'
+    assert any('goal' in message['content'] and 'plan' in message['content'] for message in request if message['role'] == 'system')
+    ids = {call['id'] for message in request for call in message.get('tool_calls', [])}
+    assert ids == {message['tool_call_id'] for message in request if message['role'] == 'tool'}
+    assert history[2]['content'] == 'old ' * 1000
+
+
+def test_indented_code_marker_does_not_complete():
+    from core.orchestration.completion import completion_text
+    assert not completion_text('Example:\n\n    <task_complete/>')[1]
+    assert not completion_text('```xml\n<task_complete/>')[1]
+    assert completion_text('Conclusion\n<task_complete/>\n')[0] == 'Conclusion'
+
+
+def test_context_index_is_bounded_and_protocol_reminders_are_deduplicated():
+    import json
+    from types import SimpleNamespace
+    from core.orchestration.model_context import model_messages
+    from core.orchestration.completion import REMINDER
+    state = {'messages': [{'role': 'system', 'content': 'main'}] +
+             [{'role': 'system', 'content': REMINDER}] * 20 + [{'role': 'user', 'content': 'latest'}],
+             'task_goal': 'goal', 'results': [{'name': 'fixture', 'summary': 'x' * 10000,
+                'error': 'y' * 10000, 'evidence': ['fixture://evidence/' + 'z' * 2000] * 30,
+                'artifacts': [{'id': 'real', 'size_bytes': 200, 'path': 'z' * 2000, 'description': 'z' * 10000}] * 30}] * 50}
+    request = model_messages(state, SimpleNamespace(current_level=lambda: 0), BudgetGuard(), 28000)
+    assert sum(message['content'] == REMINDER for message in request) == 1
+    assert len(json.dumps(request, ensure_ascii=False)) < 15000
+    assert 'total_results' in request[-2]['content'] and 'artifact_read' in request[-2]['content']
+    assert '"id": "real"' in request[-2]['content']
+    assert len(state['results']) == 50 and len(state['messages']) == 22

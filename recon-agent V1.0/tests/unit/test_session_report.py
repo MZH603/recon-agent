@@ -1,11 +1,5 @@
 import json
 
-import importlib.util
-
-
-def test_session_report_module_exists():
-    assert importlib.util.find_spec('output.session_report') is not None
-
 
 def result(name, data, **extra):
     return dict(name=name, success=True, data=data, stdout='full output', stderr='diagnostic',

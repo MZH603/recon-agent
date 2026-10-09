@@ -46,6 +46,12 @@ class ReconAgent:
 
     async def run(self, goal: str, system_prompt: str) -> dict:
         """主循环：返回 {answer, results, exhausted}。"""
+        try:
+            return await self._run(goal, system_prompt)
+        finally:
+            await self._registry.aclose()
+
+    async def _run(self, goal: str, system_prompt: str) -> dict:
         from core.context import ContextManager
 
         ctx = ContextManager(self._settings)
@@ -85,7 +91,8 @@ class ReconAgent:
 
     async def _execute(self, call: NormalizedToolCall) -> ToolResult:
         """单次调用守卫：去重 → 预算 → 注册表五道检查 → 证据登记。"""
-        skip, reason = self._dedup.should_skip(call, self.target)
+        cacheable = getattr(self._registry.get(call.name), 'cacheable', True)
+        skip, reason = self._dedup.should_skip(call, self.target) if cacheable else (False, 'stateful')
         if skip:
             self._metrics.incr("cache_hits")
             self._metrics.incr("dedup_hits")
@@ -97,7 +104,7 @@ class ReconAgent:
                                   f"[预算收敛] 当前预算档位下不允许 L{min_level} 级动作，仅被动采集")
         result = await self._registry.execute(call)
         self._update_metrics(call, result)
-        if result.success:
+        if result.success and cacheable:
             self._dedup.record(call, self.target, result.stdout[:200])
         self.evidence.add(result)
         self._observe_contradictions(result)

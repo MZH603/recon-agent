@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -61,34 +62,62 @@ def run(
     lab: bool = typer.Option(False, "--lab", help="实验环境模式：解锁内网/环回目标（仅限自有/自建环境）"),
     session: bool = typer.Option(False, "--session", help="会话模式（REPL，可逐步升级 L1/L2）"),
     resume: str = typer.Option(None, "--resume", help="恢复已有会话 ID（必须配合 --session）"),
-    ui: str = typer.Option('auto', '--ui', help='会话界面: auto|pi|rich'),
+    ui: str = typer.Option('auto', '--ui', help='会话界面: auto|tui|rich（pi 为兼容别名）'),
     auth: bool = typer.Option(False, '--auth', help='打开本次进程的 API 与目标配置页'),
     mcp_mode: bool = typer.Option(False, "--mcp", help="MCP stdio 服务器模式（供第三方 Agent 接入）"),
     authorized_for: str = typer.Option(None, "--authorized-for", help="MCP 模式授权范围（逗号分隔域名，HARD 必填）"),
     allow_l1: bool = typer.Option(False, "--allow-l1", help="MCP 模式放行 L1（HARD：L2 在 MCP 下永久禁止）"),
     output_format: str = typer.Option("markdown", "--output-format", "--format", help="markdown|json|csv"),
-    max_tokens: int = typer.Option(None, "--max-tokens", help="任务 token 预算"),
+    max_tokens: int = typer.Option(None, "--max-tokens", hidden=True, help="已取消的旧 token 预算参数"),
+    context_tokens: int = typer.Option(None, '--context-tokens', min=1, help='当前上下文容量（默认 100000 tokens）'),
+    compact_ratio: float = typer.Option(None, '--compact-ratio', min=0.01, max=0.99, help='上下文自动压缩阈值比例（默认 0.7）'),
     max_cost: float = typer.Option(None, "--max-cost", help="任务成本预算（USD）"),
     output: str = typer.Option(None, "-o", "--output", help="输出文件前缀目录"),
     diff: str = typer.Option(None, "--diff", help="与旧报告 JSON 对比，生成增量差异文件"),
     note: str = typer.Option("", "--note", help="授权背景说明（写入审计日志）"),
     auto_confirm: bool = typer.Option(False, "--auto-confirm",
                                       help="L2 自动注入三次门控确认（仅限授权测试目标/非交互自动化）"),
+    tools_config: Path = typer.Option(None, '--tools-config', help='自定义工具和外部 MCP 配置 YAML'),
+    list_tools: bool = typer.Option(False, '--list-tools', help='离线列出可用工具和最低级别后退出'),
     doctor: bool = typer.Option(False, "--doctor", callback=_doctor_callback, is_eager=True,
                                 help="环境自检（工具/网络/API Key/审计链/快照）"),
     version: bool = typer.Option(None, "--version", callback=_version_callback, is_eager=True,
                                  help="打印版本号"),
 ) -> None:
     """对授权目标执行信息搜集，或以 MCP 服务器模式供 Agent 接入。"""
+    try:
+        settings = _settings_with(max_tokens, max_cost)
+        if context_tokens is not None or compact_ratio is not None:
+            context_config = Settings(
+                CONTEXT_BUDGET=context_tokens if context_tokens is not None else settings.CONTEXT_BUDGET,
+                COMPACT_TRIGGER_RATIO=compact_ratio if compact_ratio is not None else settings.COMPACT_TRIGGER_RATIO)
+            settings.CONTEXT_BUDGET = context_config.CONTEXT_BUDGET
+            settings.COMPACT_TRIGGER_RATIO = context_config.COMPACT_TRIGGER_RATIO
+        if tools_config:
+            from tools.adapters.integration_loader import load_tools_config
+            settings = load_tools_config(settings, tools_config)
+        if list_tools:
+            from gate.scan_gate import ScanGate
+            from tools.registry import build_default
+            registry = build_default(settings, ScanGate('__catalog__', batch_mode=True, is_tty=False), '__catalog__')
+            from tools.adapters.offline_status import tool_inventory
+            for item in tool_inventory(settings, registry):
+                console.print(f"{item['name']} [L{item['min_level']}; {item['status']}] — {item['description']}", markup=False)
+            asyncio.run(registry.aclose())
+            raise typer.Exit(0)
+    except (ValueError, OSError) as exc:
+        err(f'启动配置无效: {exc}')
+        raise typer.Exit(2)
     if (resume and not session) or (mcp_mode and (session or resume or auth)):
         err("--resume 必须配合 --session；会话与 --mcp 不兼容")
         raise typer.Exit(2)
-    if ui not in ('auto', 'pi', 'rich'):
-        err('--ui 必须为 auto|pi|rich')
+    if ui not in ('auto', 'tui', 'pi', 'rich'):
+        err('--ui 必须为 auto|tui|rich（pi 为兼容别名）')
         raise typer.Exit(2)
+    if ui == 'pi':
+        ui = 'tui'
     if not mcp_mode:
         console.print(BANNER)
-    settings = _settings_with(max_tokens, max_cost)
     if lab:  # HARD: 仅解锁自有实验目标；.gov/.mil 与元数据地址仍绝对拒绝
         settings.LAB_MODE = True
         console.print(
@@ -105,6 +134,7 @@ def run(
     async def _flow() -> int:
         current_target, current_model = target, model
         connection = None
+        session_settings = settings
         use_session = session
         if launch:
             if not interactive:
@@ -114,20 +144,21 @@ def run(
             defaults = prefill(settings, model=model, target=target)
             setup_runner = run_rich_setup
             if ui != 'rich':
-                from cli.pi_bridge import pi_available
-                available, reason = pi_available()
+                from cli.tui_bridge import tui_available
+                available, reason = tui_available()
                 if available:
-                    from cli.pi_setup import run_pi_setup
-                    setup_runner = run_pi_setup
-                elif ui == 'pi':
-                    err('Pi 界面不可用: ' + reason)
+                    from cli.tui_setup import run_tui_setup
+                    setup_runner = run_tui_setup
+                elif ui == 'tui':
+                    err('TUI 界面不可用: ' + reason)
                     return 2
                 else:
-                    warn('Pi 依赖未安装，使用 Rich 兼容界面。' + reason)
+                    warn('TUI 依赖未安装，使用 Rich 兼容界面。' + reason)
             result, code = await setup_runner(defaults, settings)
             if result is None:
                 return code
             current_target, current_model, connection = result.target, result.connection.model, result.connection
+            session_settings = result.settings_override or settings
             use_session = True
             try:
                 save_defaults(result.public())
@@ -151,19 +182,19 @@ def run(
         if use_session:
             runner = session_mod.run_session
             if is_tty and sys.stdout.isatty() and os.environ.get('TERM') != 'dumb' and not batch and ui != 'rich':
-                from cli.pi_bridge import pi_available
-                available, reason = pi_available()
+                from cli.tui_bridge import tui_available
+                available, reason = tui_available()
                 if available:
-                    from cli.pi_session import run_pi_session
-                    runner = run_pi_session
-                elif ui == 'pi':
-                    err('Pi 界面不可用: ' + reason)
+                    from cli.tui_session import run_tui_session
+                    runner = run_tui_session
+                elif ui == 'tui':
+                    err('TUI 界面不可用: ' + reason)
                     return 2
                 else:
-                    warn('Pi 依赖未安装，使用 Rich 兼容界面。' + reason)
+                    warn('TUI 依赖未安装，使用 Rich 兼容界面。' + reason)
             kwargs = {} if connection is None else {'connection_override': connection}
             return await runner(
-                target=current_target, settings=settings, batch=batch, is_tty=is_tty,
+                target=current_target, settings=session_settings, batch=batch, is_tty=is_tty,
                 requested_level=0 if launch else requested, model_override=current_model,
                 output_format=output_format, output_dir=output,
                 run_pipeline=pipeline.run_pipeline, resume_id=resume, **kwargs,
@@ -174,7 +205,7 @@ def run(
 
             return await full_cascade(
                 target=target, authorized=True, level=requested,
-                auto_confirm=auto_confirm or (not is_tty), note=note)
+                auto_confirm=auto_confirm or (not is_tty), note=note, settings=settings)
         return await pipeline.run_pipeline(
             target=target, settings=settings, batch=batch, is_tty=is_tty,
             requested_level=requested, model_override=model,
@@ -185,10 +216,11 @@ def run(
 
 
 def _settings_with(max_tokens: int | None, max_cost: float | None) -> Settings:
-    """CLI 覆盖项注入 Settings（其余阈值固定在 config.py，LLM/参数不可越权）。"""
-    settings = get_settings()
-    if max_tokens:
-        settings.MAX_TOKENS_PER_TASK = max_tokens
+    """保留旧参数兼容；token 上限取消，费用配置仍按原规则覆盖。"""
+    settings = get_settings().model_copy(deep=True)
+    settings.MAX_TOKENS_PER_TASK = 0
+    if max_tokens is not None:
+        warn('--max-tokens 已取消并忽略；上下文容量请使用 --context-tokens。')
     if max_cost:
         settings.MAX_COST_PER_TASK = max_cost
     return settings

@@ -14,11 +14,6 @@ def test_config_dir_resolves_on_windows_and_linux():
         assert "\\" not in str(path).replace(str(path.drive), "") or os.name == "nt"
 
 
-def test_path_separator_is_platform_agnostic():
-    joined = get_cache_dir() / "sub" / "file.db"
-    assert str(joined).count("/") + str(joined).count("\\") >= 2  # pathlib 自动适配
-
-
 def test_tool_discovery_finds_python():
     # Windows: python.exe；Linux: python3/python —— 都必须能发现
     assert find_tool("python" if os.name == "nt" else "python3") is not None

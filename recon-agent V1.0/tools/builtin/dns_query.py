@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from platforms.sync_worker import run_sync
 import hashlib
 import json
 import socket
@@ -49,7 +50,7 @@ class DNSQueryTool(BaseTool):
         assert isinstance(params, DNSParams)
         async with self._limiter.slot():
             try:
-                raw, resolver = await asyncio.to_thread(self._doh_fetch, params.target, params.rtype)
+                raw, resolver = await run_sync(self._doh_fetch, params.target, params.rtype)
             except (OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
                 return await self._fallback_socket(params.target, exc)
         data = json.loads(raw)
@@ -91,7 +92,7 @@ class DNSQueryTool(BaseTool):
     async def _fallback_socket(self, target: str, exc: Exception) -> ToolResult:
         """DoH 不可达 → socket 系统解析（仅 A 记录，HARD 标注降级）。"""
         try:
-            _, _, ips = await asyncio.to_thread(socket.gethostbyname_ex, target)
+            _, _, ips = await run_sync(socket.gethostbyname_ex, target)
         except (OSError, UnicodeError):
             return ToolResult.err(self.name, f"DNS 查询失败: {exc}（失败不重试）")
         return ToolResult(

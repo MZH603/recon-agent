@@ -42,4 +42,17 @@ def build_system_prompt(
     result = template
     for key, value in replacements.items():
         result = result.replace(key, value)
-    return result
+    return result + "\n扩展工具采用按需披露：先用 tool_catalog 搜索并 select 工具名，再依据完整 Schema 调用；选择工具不授予 L1/L2 权限。API 静态候选与 mock 请求不得写成已确认接口。\n"
+
+
+SESSION_PROMPT_PATH = Path(__file__).resolve().parent / "prompt_templates" / "session.md"
+
+
+def session_prompt(registry, target, settings=None):
+    settings = settings or getattr(registry, 'settings', None) or getattr(registry, '_settings', None)
+    prompt_file = getattr(settings, 'SESSION_PROMPT_FILE', '')
+    if prompt_file:
+        main = Path(prompt_file).expanduser().read_text(encoding='utf-8')
+    else:
+        main = SESSION_PROMPT_PATH.read_text(encoding='utf-8')
+    return main + f"\n授权目标：{target}。当前进程按真实门控状态授权，L1 人工确认、L2 解锁和逐动作确认均由代码处理。\n可用工具：" + '; '.join(registry.briefs()) + '\n'

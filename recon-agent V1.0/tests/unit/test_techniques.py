@@ -1,9 +1,7 @@
 """插件架构 + 签名扩容测试。"""
 from tools.builtin.fingerprint import _apply_body
-from tools.builtin.signatures import BODY_SIGNATURES
-from tools.deep_fingerprint import DeepFingerprintParams  # noqa: F401
+from tools.deep_fingerprint import DeepFingerprintParams
 from tools.techniques import REGISTRY
-from tools.techniques.base import Finding
 
 
 def test_plugin_registry_discovery():
@@ -36,16 +34,14 @@ def test_js_inventory_plugin_extracts_version():
     assert any(f.name == "Vue" and f.version == "3.4.21" for f in findings)
 
 
-def test_signature_db_expanded_for_cn_ecosystem():
-    """国内高校/政企生态签名扩容：教务系统/OA/组件。"""
-    patterns = {p for p, *_ in BODY_SIGNATURES}
-    assert "正方教务|zfsoft|zf_soft" in patterns
-    assert "泛微|weaver|e-cology" in patterns
-    assert "ueditor" in patterns
+def test_fingerprint_detects_education_oa_and_editor():
     findings: dict = {}
     _apply_body("<title>正方教务管理系统</title><script src='ueditor.config.js'>", findings)
     assert findings["system"]["name"] == "正方教务系统"
     assert findings["component"]["name"] == "UEditor"
+    oa: dict = {}
+    _apply_body("<title>e-cology</title>", oa)
+    assert oa["system"]["name"] == "泛微OA"
 
 
 def test_deep_fingerprint_params_bounded():

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from output.report import ReconData
-from tools.takeover_check import TakeoverCheckTool, TakeoverParams
-from tools.wayback_urls import WaybackParams, WaybackTool
+from tools.builtin.takeover_check import TakeoverCheckTool, TakeoverParams
+from tools.builtin.wayback_urls import WaybackParams, WaybackTool
 from utils.config import Settings
 
 MAX_TAKEOVER_HOSTS = 12  # HARD: 接管检测的子域数量上限

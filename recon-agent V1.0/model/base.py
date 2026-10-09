@@ -64,15 +64,36 @@ class StreamUsage:
             self.usage.update(event.token_usage)
 
     def partial(self, messages, count_tokens, tools=None):
+        from model.cost import valid_cost
         request = json.dumps(messages, ensure_ascii=False) + (json.dumps(tools, ensure_ascii=False) if tools else '')
-        return {'input': self.usage.get('input', conservative_tokens(request, count_tokens)),
-                'output': self.usage.get('output', conservative_tokens(self.output, count_tokens)),
-                'cost': None, 'cost_known': False}
+        actual = {key: self.usage.get(key) for key in ('input', 'output')}
+        known = {key: isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                 for key, value in actual.items()}
+        cost = valid_cost(self.usage.get('cost'))
+        return {'input': actual['input'] if known['input'] else conservative_tokens(request, count_tokens),
+                'output': actual['output'] if known['output'] else conservative_tokens(self.output, count_tokens),
+                'cost': cost, 'cost_known': cost is not None,
+                'estimated': not all(known.values()) or bool(self.usage.get('estimated'))}
+
+
+def estimate_text_tokens(text: str) -> int:
+    """Lightweight fallback: wide characters count individually, Latin about four per token."""
+    import math
+    import unicodedata
+    text = text or ''
+    wide = sum(unicodedata.east_asian_width(char) in ('W', 'F') for char in text)
+    return max(1, wide + math.ceil((len(text) - wide) / 4))
 
 
 def conservative_tokens(text: str, count_tokens: Callable) -> int:
-    """Without usage, reserve at least one token per UTF-8 byte, including CJK text."""
-    return max(1, count_tokens(text), len(text.encode('utf-8')))
+    """Prefer the model counter; unknown usage is an estimate, never a byte count."""
+    try:
+        value = count_tokens(text)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    except Exception:
+        pass
+    return estimate_text_tokens(text)
 
 
 class NormalizedToolCall(BaseModel):
@@ -89,7 +110,7 @@ class LLMResponse(BaseModel):
     content: str = ""
     reasoning_content: str = ""  # Provider protocol history, never a user-facing answer.
     tool_calls: list[NormalizedToolCall] = Field(default_factory=list)
-    token_usage: dict = Field(default_factory=lambda: {"input": 0, "output": 0})
+    token_usage: dict = Field(default_factory=dict)
     model: str = ""
 
 
