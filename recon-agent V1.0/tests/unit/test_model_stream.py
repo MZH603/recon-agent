@@ -96,7 +96,8 @@ def test_reasoning_stream_is_observed_preserved_and_counted(monkeypatch):
     result = asyncio.run(LiteLLMAdapter('fixture').complete_stream([], on_delta=events.append))
     assert any(event.kind == 'reasoning' and event.content == '内部推理' for event in events)
     assert result.reasoning_content == '内部推理'
-    assert result.token_usage['output'] >= len('内部推理answer'.encode())
+    assert 0 < result.token_usage['output'] < len('内部推理answer'.encode())
+    assert result.token_usage['estimated']
 
 
 def test_partial_failure_never_retries_or_falls_back_and_error_is_safe(monkeypatch):
@@ -173,8 +174,9 @@ def test_real_sdk_chunks_preserve_known_pricing_and_missing_usage_is_estimated(m
     sdk(monkeypatch, [Stream([chunk('long enough visible response'), terminal()])])
     messages=[{'role':'user','content':'中文 hello'}]
     result=asyncio.run(LiteLLMAdapter('fixture').complete_stream(messages))
-    assert result.token_usage['input'] >= len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
-    assert result.token_usage['output'] >= len('long enough visible response'.encode('utf-8'))
+    assert 0 < result.token_usage['input'] < len(json.dumps(messages, ensure_ascii=False).encode('utf-8'))
+    assert result.token_usage['estimated']
+    assert 0 < result.token_usage['output'] < len('long enough visible response'.encode('utf-8'))
     assert result.token_usage['cost_known'] is False
 
 
@@ -194,3 +196,32 @@ def test_valid_tool_json_eof_without_finish_marker_never_executes(tmp_path, monk
             assert state['used_tokens'] > 0 and state['cost_unknown_calls']==1
     asyncio.run(scenario())
     assert len(requests)==1 and stream.closed
+
+
+def test_partial_usage_preserves_actual_dimensions_and_known_cost():
+    from model.base import StreamUsage, StreamEvent, conservative_tokens
+    partial = StreamUsage()
+    partial.add(StreamEvent('content', content='中文 answer'))
+    partial.add(StreamEvent('usage', token_usage={'input': 9, 'cost': 0.25}))
+    consumed = partial.partial([{'role': 'user', 'content': 'hello'}], lambda text: 3)
+    assert consumed['input'] == 9 and consumed['output'] == 3
+    assert consumed['estimated'] and consumed['cost'] == 0.25 and consumed['cost_known']
+    assert conservative_tokens('中文', lambda text: 2) == 2
+    assert 0 < conservative_tokens('中文', lambda text: None) < len('中文'.encode())
+
+
+def test_synchronous_missing_usage_is_estimated_without_losing_known_cost(monkeypatch):
+    async def complete(**kwargs):
+        return NS(choices=[NS(message=NS(content='中文 answer', tool_calls=None))], usage=None,
+                  model='fixture', _hidden_params={'response_cost': 0.25})
+    monkeypatch.setattr('model.litellm_adapter._import_litellm', lambda: NS(acompletion=complete))
+    response = asyncio.run(LiteLLMAdapter('fixture').complete([{'role': 'user', 'content': '中文 goal'}]))
+    assert response.token_usage['input'] > 0 and response.token_usage['output'] > 0
+    assert response.token_usage['estimated'] and response.token_usage['cost'] == 0.25
+
+
+def test_stream_incomplete_usage_preserves_known_input_and_estimates_output(monkeypatch):
+    sdk(monkeypatch, [Stream([chunk('visible response'), terminal(), chunk(usage=NS(prompt_tokens=9))])])
+    response = asyncio.run(LiteLLMAdapter('fixture').complete_stream([{'role': 'user', 'content': 'hello'}]))
+    assert response.token_usage['input'] == 9
+    assert response.token_usage['output'] > 0 and response.token_usage['estimated']

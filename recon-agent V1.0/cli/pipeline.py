@@ -33,7 +33,7 @@ async def run_pipeline(
 
     from collectors.asset_expander import expand_assets
     from collectors.web_fingerprint import collect_tech_cards, extract_product_versions
-    from tools.subdomain_enum import SubdomainEnumTool, SubdomainParams
+    from tools.builtin.subdomain_enum import SubdomainEnumTool, SubdomainParams
 
     assets = await expand_assets(target, settings)
 

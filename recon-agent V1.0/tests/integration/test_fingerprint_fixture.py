@@ -3,7 +3,7 @@ import asyncio
 import http.server
 import threading
 
-from tools.builtin.fingerprint import FingerprintParams, FingerprintTool, split_target
+from tools.builtin.fingerprint import FingerprintParams, FingerprintTool
 from utils.config import Settings
 
 FIXTURE_BODY = (
@@ -39,12 +39,6 @@ def _serve() -> tuple[http.server.ThreadingHTTPServer, int]:
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _FixtureHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1]
-
-
-def test_split_target_parses_host_port_scheme():
-    assert split_target("127.0.0.1:8080") == ("127.0.0.1", 8080, "")
-    assert split_target("http://127.0.0.1:9000/a") == ("127.0.0.1", 9000, "http")
-    assert split_target("example.com") == ("example.com", None, "")
 
 
 def test_fingerprint_against_local_fixture():

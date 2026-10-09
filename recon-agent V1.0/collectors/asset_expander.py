@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from platforms.sync_worker import run_sync
 import json
 import socket
 import urllib.request
@@ -32,7 +33,7 @@ async def expand_assets(target: str, settings: Settings | None = None) -> dict:
         "notes": [],
     }
     result["dns"] = await _collect_dns(domain, settings)
-    result["ips"], c_notes = _resolve_ips(domain)
+    result["ips"], c_notes = await run_sync(_resolve_ips, domain)
     result["notes"] += c_notes
     result["c_sectors"] = [ip.rsplit(".", 1)[0] + ".0/24" for ip in result["ips"] if "." in ip]
     sub_data = await _crtsh_subdomains(domain, settings)
@@ -100,7 +101,7 @@ async def _crtsh_subdomains(domain: str, settings: Settings) -> dict:
     used_source = ""
     for source, template in CT_SOURCES:
         try:
-            raw = await asyncio.to_thread(_http_get, template.format(domain=domain), 30)
+            raw = await run_sync(_http_get, template.format(domain=domain), 30)
             entries = json.loads(raw)
             used_source = source
             break
@@ -138,10 +139,10 @@ def _http_get(url: str, timeout: int) -> str:
 async def _whois(domain: str, settings: Settings) -> dict:
     """原生 socket WHOIS（iana → 注册商两级查询），失败显式记录。"""
     try:
-        text = await asyncio.to_thread(_whois_query, domain, IANA_WHOIS, settings.CONNECT_TIMEOUT)
+        text = await run_sync(_whois_query, domain, IANA_WHOIS, settings.CONNECT_TIMEOUT)
         referral = _referral_server(text)
         if referral:
-            text = await asyncio.to_thread(
+            text = await run_sync(
                 _whois_query, domain, (referral, 43), settings.CONNECT_TIMEOUT
             )
     except (OSError, UnicodeError) as exc:

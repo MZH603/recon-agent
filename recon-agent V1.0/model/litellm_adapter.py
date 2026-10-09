@@ -18,7 +18,7 @@ from model.base import (
     LLMResponse,
     ModelUnavailable,
     NormalizedToolCall,
-    StreamEvent, PartialStreamError, observe, conservative_tokens,
+    StreamEvent, PartialStreamError, observe, conservative_tokens, estimate_text_tokens,
 )
 
 
@@ -87,7 +87,17 @@ class LiteLLMAdapter(LLMProvider):
         for attempt in range(self.max_retries + 1):
             try:
                 resp = await litellm.acompletion(**kwargs)
-                return self._to_response(resp, litellm)
+                response = self._to_response(resp, litellm)
+                usage = response.token_usage
+                if usage['estimated']:
+                    request = json.dumps(messages, ensure_ascii=False) + (json.dumps(tools, ensure_ascii=False) if tools else '')
+                    output = response.content + response.reasoning_content + json.dumps(
+                        [call.model_dump() for call in response.tool_calls], ensure_ascii=False)
+                    if usage['input'] is None:
+                        usage['input'] = conservative_tokens(request, self.count_tokens)
+                    if usage['output'] is None:
+                        usage['output'] = conservative_tokens(output, self.count_tokens)
+                return response
             except ModelUnavailable as exc:
                 raise ModelUnavailable(f"模型 {self.model} 不可达: {type(exc).__name__}") from None
             except Exception as exc:  # noqa: BLE001 —— 统一收敛为 ModelUnavailable
@@ -128,10 +138,12 @@ class LiteLLMAdapter(LLMProvider):
                         observe(on_delta, StreamEvent('chunk'))
                         chunk_usage = _field(chunk, 'usage')
                         if chunk_usage is not None:
-                            usage = SimpleNamespace(prompt_tokens=_field(chunk_usage, 'prompt_tokens', 0),
-                                                    completion_tokens=_field(chunk_usage, 'completion_tokens', 0))
-                            observe(on_delta, StreamEvent('usage', token_usage={
-                                'input': usage.prompt_tokens or 0, 'output': usage.completion_tokens or 0}))
+                            usage = SimpleNamespace(prompt_tokens=_field(chunk_usage, 'prompt_tokens'),
+                                                    completion_tokens=_field(chunk_usage, 'completion_tokens'))
+                            observed_usage = {key: value for key, value in
+                                (('input', usage.prompt_tokens), ('output', usage.completion_tokens))
+                                if isinstance(value, int) and not isinstance(value, bool) and value >= 0}
+                            observe(on_delta, StreamEvent('usage', token_usage=observed_usage))
                         for choice in _field(chunk, 'choices', []) or []:
                             if _field(choice, 'index', 0) != 0:
                                 continue
@@ -179,11 +191,15 @@ class LiteLLMAdapter(LLMProvider):
                                            'function': {'name': value['name'], 'arguments': value['arguments']}}
                                           for index, value in sorted(calls.items())]}}])
                     response = self._to_response(raw, sdk)
-                    if usage is None:
+                    actual_input = getattr(usage, 'prompt_tokens', None)
+                    actual_output = getattr(usage, 'completion_tokens', None)
+                    input_known = isinstance(actual_input, int) and not isinstance(actual_input, bool) and actual_input >= 0
+                    output_known = isinstance(actual_output, int) and not isinstance(actual_output, bool) and actual_output >= 0
+                    if not input_known or not output_known:
                         response.token_usage = {
-                            'input': conservative_tokens(json.dumps(messages, ensure_ascii=False) +
+                            'input': actual_input if input_known else conservative_tokens(json.dumps(messages, ensure_ascii=False) +
                                 (json.dumps(tools, ensure_ascii=False) if tools else ''), self.count_tokens),
-                            'output': conservative_tokens(''.join(reasoning) + text + ''.join(v['arguments'] for v in calls.values()), self.count_tokens),
+                            'output': actual_output if output_known else conservative_tokens(''.join(reasoning) + text + ''.join(v['arguments'] for v in calls.values()), self.count_tokens),
                             'cost': None, 'cost_known': False, 'estimated': True}
                     return response
                 return await asyncio.wait_for(consume(), timeout=self.timeout)
@@ -213,13 +229,17 @@ class LiteLLMAdapter(LLMProvider):
         message = resp.choices[0].message
         usage = getattr(resp, "usage", None)
         cost = response_cost(resp, sdk)
+        input_tokens, output_tokens = getattr(usage, 'prompt_tokens', None), getattr(usage, 'completion_tokens', None)
+        input_tokens = input_tokens if isinstance(input_tokens, int) and input_tokens >= 0 else None
+        output_tokens = output_tokens if isinstance(output_tokens, int) and output_tokens >= 0 else None
         return LLMResponse(
             content=message.content or "",
             reasoning_content=getattr(message, 'reasoning_content', None) or '',
             tool_calls=self._normalize_tool_calls(getattr(message, "tool_calls", None)),
             token_usage={
-                "input": getattr(usage, "prompt_tokens", 0) or 0,
-                "output": getattr(usage, "completion_tokens", 0) or 0,
+                "input": input_tokens,
+                "output": output_tokens,
+                "estimated": input_tokens is None or output_tokens is None,
                 "cost": cost, "cost_known": cost is not None,
             },
             model=getattr(resp, "model", "") or self.model,
@@ -247,8 +267,8 @@ class LiteLLMAdapter(LLMProvider):
         return calls
 
     def count_tokens(self, text: str) -> int:
-        """轻量粗估（len/4），避免额外依赖；预算控制精度足够。"""
-        return max(1, len(text or "") // 4)
+        """轻量中文/Latin估算；实际供应商usage仍优先。"""
+        return estimate_text_tokens(text)
 
 
 def _field(value, name, default=None):

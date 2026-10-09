@@ -1,6 +1,5 @@
 """Launcher configuration stays local, authenticated and idle until confirmed."""
 import asyncio
-import importlib.util
 import json
 
 import pytest
@@ -15,10 +14,6 @@ def isolated_launcher_environment(monkeypatch, tmp_path):
     monkeypatch.setattr('platforms.paths.get_config_dir', lambda: tmp_path)
     monkeypatch.setattr('utils.logger._console', None)
     monkeypatch.setattr('utils.logger._stderr_mode', False)
-
-
-def test_launcher_module_exists():
-    assert importlib.util.find_spec('cli.launcher'), 'launcher configuration is missing'
 
 
 def test_defaults_and_secret_store(tmp_path, monkeypatch):
@@ -98,9 +93,9 @@ def test_lab_target_and_explicit_primary_not_overwritten(tmp_path, monkeypatch):
 
 
 def test_authenticated_setup_tcp_rejects_runtime_and_bad_schema():
-    from cli.pi_bridge import PiBridge, ProtocolError
+    from cli.tui_bridge import TuiBridge, ProtocolError
     async def scenario():
-        async with PiBridge() as bridge:
+        async with TuiBridge() as bridge:
             reader, writer = await asyncio.open_connection('127.0.0.1', bridge.port)
             def send(value): writer.write((json.dumps(value)+'\n').encode())
             send({'type': 'hello', 'token': bridge.token})
@@ -118,13 +113,13 @@ def test_authenticated_setup_tcp_rejects_runtime_and_bad_schema():
 
 
 def test_setup_retry_and_accept_before_session(tmp_path):
-    from cli.pi_bridge import PiBridge, read_frame
-    from cli.pi_setup import serve_setup
+    from cli.tui_bridge import TuiBridge, read_frame
+    from cli.tui_setup import serve_setup
     from cli.launcher import prefill
     from utils.config import Settings
     async def scenario():
         settings = Settings()
-        async with PiBridge() as bridge:
+        async with TuiBridge() as bridge:
             reader, writer = await asyncio.open_connection('127.0.0.1', bridge.port)
             def send(value): writer.write((json.dumps(value)+'\n').encode())
             send({'type':'hello', 'token':bridge.token})
@@ -158,7 +153,7 @@ def test_bare_and_auth_cli_use_context_and_idle_session(monkeypatch, tmp_path):
     monkeypatch.setattr(main, '_settings_with', tty_settings)
     monkeypatch.setattr('cli.launcher.get_config_dir', lambda: tmp_path)
     monkeypatch.setenv('TERM', 'xterm')
-    monkeypatch.setattr('cli.pi_bridge.pi_available', lambda: (False, 'fixture'))
+    monkeypatch.setattr('cli.tui_bridge.tui_available', lambda: (False, 'fixture'))
     calls = []
     async def setup(*args, **kwargs): return result, 0
     async def session(**kwargs): calls.append(kwargs); return 0
@@ -197,7 +192,7 @@ def test_cli_python_interrupt_exits_130(monkeypatch):
 def test_real_setup_child_is_reaped_on_all_paths(tmp_path, monkeypatch, mode):
     """Actual Node child and TCP IPC; no models, tools, runtime or database."""
     import shutil
-    from cli import pi_setup
+    from cli import tui_setup
     from cli.launcher import prefill
     from utils.config import Settings
     if not shutil.which('node'):
@@ -207,10 +202,10 @@ def test_real_setup_child_is_reaped_on_all_paths(tmp_path, monkeypatch, mode):
     command = payload if mode.startswith('accepted') else {'type':mode}
     entry.write_text("""
 import net from 'node:net';
-const socket=net.createConnection({host:'127.0.0.1',port:Number(process.env.RECON_PI_PORT)});
+const socket=net.createConnection({host:'127.0.0.1',port:Number(process.env.RECON_TUI_PORT)});
 socket.on('error',()=>{});
 socket.on('connect',()=>{
- socket.write(JSON.stringify({type:'hello',token:process.env.RECON_PI_TOKEN})+'\\n');
+ socket.write(JSON.stringify({type:'hello',token:process.env.RECON_TUI_TOKEN})+'\\n');
 });
 socket.once('data',()=>{
  COMMAND
@@ -225,8 +220,8 @@ socket.once('data',()=>{
 setInterval(()=>{},1000);
 """.replace('MODE', json.dumps(mode)).replace('COMMAND', "socket.end();" if mode == 'eof' else
              "socket.write(" + json.dumps(json.dumps(command)+'\n') + ");") if mode != 'no-connect' else 'setInterval(()=>{},1000);', encoding='utf-8')
-    monkeypatch.setattr(pi_setup, 'PI_DIR', tmp_path)
-    monkeypatch.setattr(pi_setup, 'pi_available', lambda: (True, ''))
+    monkeypatch.setattr(tui_setup, 'TUI_DIR', tmp_path)
+    monkeypatch.setattr(tui_setup, 'tui_available', lambda: (True, ''))
     original_spawn = asyncio.create_subprocess_exec
     children = []
     async def spawn(*args, **kwargs):
@@ -235,15 +230,15 @@ setInterval(()=>{},1000);
         children.append(child)
         return child
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
-    original_close = pi_setup.close_child
+    original_close = tui_setup.close_child
     async def close(child): await original_close(child, timeout=0.05)
-    monkeypatch.setattr(pi_setup, 'close_child', close)
+    monkeypatch.setattr(tui_setup, 'close_child', close)
     if mode == 'no-connect':
-        original_connected = pi_setup.PiBridge.wait_connected
+        original_connected = tui_setup.TuiBridge.wait_connected
         async def connect(bridge): await original_connected(bridge, timeout=0.05)
-        monkeypatch.setattr(pi_setup.PiBridge, 'wait_connected', connect)
+        monkeypatch.setattr(tui_setup.TuiBridge, 'wait_connected', connect)
     settings = Settings()
-    result, code = asyncio.run(pi_setup.run_pi_setup(prefill(settings, config_dir=tmp_path), settings))
+    result, code = asyncio.run(tui_setup.run_tui_setup(prefill(settings, config_dir=tmp_path), settings))
     assert code == {'eof':2, 'quit':0, 'cancel':130, 'accepted':0, 'accepted-cancel':130, 'accepted-quit':0, 'no-connect':2}[mode]
     assert bool(result) == (mode == 'accepted')
     assert len(children) == 1 and children[0].returncode is not None
@@ -254,7 +249,7 @@ def test_noninteractive_cli_never_opens_setup(monkeypatch):
     from cli.main import app
     async def forbidden(*args, **kwargs): pytest.fail('setup must not open')
     monkeypatch.setattr('cli.launcher.run_rich_setup', forbidden)
-    monkeypatch.setattr('cli.pi_setup.run_pi_setup', forbidden)
+    monkeypatch.setattr('cli.tui_setup.run_tui_setup', forbidden)
     for arguments in ([], ['--auth'], ['--auth', '--batch']):
         result = CliRunner().invoke(app, arguments)
         assert result.exit_code == 2

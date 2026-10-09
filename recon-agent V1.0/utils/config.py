@@ -8,6 +8,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer, field_validator
 
 from platforms.paths import get_config_dir
+from tools.adapters.integration_config import CustomToolConfig, MCPServerConfig
+from tools.adapters.extension_config import ExtensionToolsConfig
 
 
 def optional_api_key(value: str | SecretStr | None) -> SecretStr | None:
@@ -81,17 +83,40 @@ class Settings(BaseModel):
     GATE_LEVEL2_REQUIRES_TTY: bool = True  # --level 2 必须 TTY
 
     # ---- Token / 上下文 ----
-    CONTEXT_BUDGET: int = 28_000
+    CONTEXT_BUDGET: int = Field(default=100_000, gt=0)
     COMPRESS_THRESHOLD: int = 1_500        # 超过即落盘（tokens 粗估）
-    COMPACT_TRIGGER_RATIO: float = 0.70    # 60% 预警 / 70% 触发
+    COMPACT_TRIGGER_RATIO: float = Field(default=0.70, gt=0, lt=1, allow_inf_nan=False)
     CACHE_TTL_SECONDS: int = 86_400
+
+    # ---- User-configured tool integrations (no external startup by default) ----
+    custom_tools: list[CustomToolConfig] = Field(default_factory=list)
+    mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
+    extension_tools: ExtensionToolsConfig = Field(default_factory=ExtensionToolsConfig)
+    TOOL_EVIDENCE_DIR: str = ""
+    TOOL_TIMEOUT_SECONDS: float = Field(default=120, gt=0,allow_inf_nan=False)
+    TOOL_CLEANUP_SECONDS: float = Field(default=5, gt=0,allow_inf_nan=False)
+    TOOL_TIMEOUT_OVERRIDES: dict[str, float] = Field(default_factory=dict)
+    TOOL_RESULT_MAX_BYTES: int = Field(default=16000, ge=1024)
+    SESSION_PROMPT_FILE: str = ""
+    TUI_THEME: str = "dark"
+
+    @field_validator('TOOL_TIMEOUT_OVERRIDES')
+    @classmethod
+    def positive_tool_timeouts(cls, values):
+        import math
+        if any(not math.isfinite(v) or v <= 0 for v in values.values()):
+            raise ValueError('tool timeouts must be finite and positive')
+        return values
+    API_RECON_MAX_REQUESTS: int = Field(default=8, ge=1, le=8)
+    API_RECON_MAX_ASSET_BYTES: int = Field(default=100_000, ge=1024, le=100_000)
+    API_RECON_TIMEOUT_SECONDS: float = Field(default=30, ge=1, le=120)
 
     # ---- 模型 ----
     model: ModelConfig = Field(default_factory=ModelConfig)
 
     # ---- 预算 ----
     MAX_COST_PER_TASK: float = 2.0
-    MAX_TOKENS_PER_TASK: int = 60_000
+    MAX_TOKENS_PER_TASK: int = 0           # 旧配置兼容字段，不再作为限制
 
     # ---- 提效减耗 ----
     DEDUP_ENABLED: bool = True

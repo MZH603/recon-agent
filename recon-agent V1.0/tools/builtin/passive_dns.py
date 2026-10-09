@@ -6,6 +6,7 @@ HARD：仅访问第三方情报服务与公共解析器，不触碰目标业务�
 from __future__ import annotations
 
 import asyncio
+from platforms.sync_worker import run_sync
 import json
 import re
 import socket
@@ -37,7 +38,7 @@ def _in_scope(name: str, domain: str) -> bool:
 
 
 async def _aget(url: str, settings: Settings, timeout_mult: int = 1) -> str:
-    _, _, body = http_get(url, settings.CONNECT_TIMEOUT * timeout_mult, max_bytes=2_000_000)
+    _, _, body = await run_sync(http_get, url, settings.CONNECT_TIMEOUT * timeout_mult, max_bytes=2_000_000)
     return body
 
 
@@ -89,7 +90,7 @@ async def dns_brute(domain: str, limit: int) -> set[str]:
         async with semaphore:
             try:
                 await asyncio.wait_for(
-                    asyncio.to_thread(socket.getaddrinfo, host, None), timeout=BRUTE_TIMEOUT
+                    run_sync(socket.getaddrinfo, host, None), timeout=BRUTE_TIMEOUT
                 )
                 return host
             except (OSError, asyncio.TimeoutError):

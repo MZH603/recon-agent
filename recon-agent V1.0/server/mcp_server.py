@@ -79,25 +79,29 @@ async def serve(authorized_for: list[str], allow_l1: bool = False,
     if not roots:
         print("[mcp] 启动失败：必须 --authorized-for <域名,域名> 声明授权范围（HARD）", file=sys.stderr)
         return 2
-    protocol = MCPProtocol(MCPBridge(settings, roots, allow_l1))
+    bridge = MCPBridge(settings, roots, allow_l1)
+    protocol = MCPProtocol(bridge)
     audit("mcp_server_start", {"roots": roots, "allow_l1": allow_l1})
     warn(f"[mcp] recon-agent V1.0 MCP 服务器就绪（授权范围: {', '.join(roots)}，L1={'允许' if allow_l1 else '禁止'}）")
-    while True:
-        line = await asyncio.to_thread(sys.stdin.readline)
-        if not line:
-            return 0  # EOF：客户端断开
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError as exc:
-            warn(f"[mcp] 非 JSON 帧（忽略）: {exc}")
-            continue
-        response = await protocol.handle(message)
-        if response is not None:
-            sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-            sys.stdout.flush()
+    try:
+        while True:
+            line = await asyncio.to_thread(sys.stdin.readline)
+            if not line:
+                return 0  # EOF：客户端断开
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError as exc:
+                warn(f"[mcp] 非 JSON 帧（忽略）: {exc}")
+                continue
+            response = await protocol.handle(message)
+            if response is not None:
+                sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
+                sys.stdout.flush()
+    finally:
+        await bridge.aclose()
 
 
 def main(argv: list[str] | None = None) -> int:

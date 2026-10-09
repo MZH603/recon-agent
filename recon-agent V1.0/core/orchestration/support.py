@@ -17,11 +17,13 @@ class NodeSupport:
     def _pause_update(self, kind, question, **kwargs):
         return {'route': 'pause', 'status': 'paused', 'pending': self._pending(kind, question, **kwargs)}
 
-    @staticmethod
-    def _reply(call: dict, result: dict) -> dict:
-        content = json.dumps(result, ensure_ascii=False)
+    def _reply(self, call: dict, result: dict) -> dict:
+        from tools.runtime.result_payload import ResultPayloads
+        from tools.runtime.evidence_store import canonical_json
+        content = canonical_json(ResultPayloads(self.settings).for_model(result)).decode('utf-8')
         return ({'role': 'tool', 'tool_call_id': call['id'], 'content': content} if call['native'] else
-                {'role': 'user', 'content': '<tool_result>' + content + '</tool_result>'})
+                {'role': 'user', 'content': '<tool_result>' + content + '</tool_result>',
+                 '_context_tool_result': True})
 
     @staticmethod
     def _arguments(call, model):
@@ -57,6 +59,8 @@ class NodeSupport:
         call = state['queued_calls'][0]
         if record:
             result = self._annotate(call, result)
+            from tools.runtime.result_payload import ResultPayloads
+            result = ResultPayloads(self.settings).prepare(result, self.target)
         queue = state['queued_calls'][1:]
         messages = state['messages'] + [self._reply(call, result)]
         deferred = state.get('deferred_user', [])
@@ -89,7 +93,7 @@ class NodeSupport:
         if not is_in_scope(params.target, self.target):
             return None, 'Scope rejection: target is outside the operator-authorized scope.', 'validation'
         if not self.guard.allows(tool.min_level):
-            return None, 'Budget tier does not allow this action.', 'budget'
+            return None, '成本预算达到硬上限。用 /budget cost USD 增加成本上限后继续，已用量不清零。', 'budget'
         return params, '', ''
 
     def _schema_error(self, state, error):

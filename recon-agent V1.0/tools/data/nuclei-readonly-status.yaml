@@ -1,0 +1,12 @@
+# 仅验证响应状态的演示，不代表漏洞。路径固定，只读，单请求。
+id: recon-readonly-status
+info:
+  name: Read-only HTTP status observation
+  author: recon-agent
+  severity: info
+http:
+  - method: HEAD
+    path: ['{{BaseURL}}/']
+    matchers:
+      - type: status
+        status: [200]

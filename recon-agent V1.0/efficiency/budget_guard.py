@@ -1,4 +1,4 @@
-"""预算三档监控（HARD：60% 预警收敛 L2 / 80% 停主动 / 100% 终止 LLM 调用 + 报告水印）。"""
+"""任务成本预算监控：60%/80% 软提示，100% 暂停模型调用。"""
 from __future__ import annotations
 
 from enum import Enum
@@ -10,8 +10,8 @@ class BudgetState(str, Enum):
     """预算状态四档。"""
 
     HEALTHY = "HEALTHY"
-    WARNING = "WARNING"          # >60%：停止 L2 新动作
-    CONVERGING = "CONVERGING"    # >80%：停止主动探测，仅被动 + 出报告
+    WARNING = "WARNING"          # >=60%：软提示
+    CONVERGING = "CONVERGING"    # >=80%：软提示
     EXHAUSTED = "EXHAUSTED"      # 100%：立即终止 LLM 调用，模板渲染已有结果
 
 
@@ -20,9 +20,9 @@ class BudgetExhausted(RuntimeError):
 
 
 class BudgetGuard(BaseModel):
-    """按 token / 成本双维度监控，取更先触发的档位。"""
+    """按成本监控；累计 token 仅用于用量记账。"""
 
-    max_tokens: int = 60_000
+    max_tokens: int = 0  # Deprecated compatibility field; never enforced.
     max_cost: float = 2.0
     used_tokens: int = 0
     used_cost: float = 0.0
@@ -34,10 +34,7 @@ class BudgetGuard(BaseModel):
 
     def state(self) -> BudgetState:
         """当前预算档位。"""
-        ratio = max(
-            self.used_tokens / self.max_tokens if self.max_tokens else 0,
-            self.used_cost / self.max_cost if self.max_cost else 0,
-        )
+        ratio = self.used_cost / self.max_cost if self.max_cost else 0
         if ratio >= 1.0:
             return BudgetState.EXHAUSTED
         if ratio >= 0.8:
@@ -50,19 +47,12 @@ class BudgetGuard(BaseModel):
         """供每次 LLM 调用前检查；EXHAUSTED 直接抛异常（HARD）。"""
         state = self.state()
         if state is BudgetState.EXHAUSTED:
-            raise BudgetExhausted("预算耗尽（HARD：终止 LLM 调用，转模板报告）")
+            raise BudgetExhausted("任务成本预算达到硬上限；用 /budget cost USD 追加成本预算后继续，已用量不会清零。")
         return state
 
     def allows(self, min_level: int) -> bool:
-        """按档位判断是否允许发起某级别动作（HARD：WARNING 收敛 L2，CONVERGING 仅被动）。"""
-        state = self.state()
-        if state is BudgetState.EXHAUSTED:
-            return False
-        if state is BudgetState.CONVERGING:
-            return min_level == 0
-        if state is BudgetState.WARNING:
-            return min_level <= 1
-        return True
+        """Soft thresholds only advise; the hard limit blocks new actions."""
+        return self.state() is not BudgetState.EXHAUSTED
 
     def watermark_required(self) -> bool:
         """EXHAUSTED 时报告必须带 [INCOMPLETE] 水印（HARD）。"""

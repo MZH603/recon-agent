@@ -10,6 +10,7 @@ dependencies = [
     "rich>=13.0",
     "pydantic>=2.5",
     "pyyaml>=6.0",
+    "jsonschema>=4.20",
     "litellm>=1.40",
     "langgraph>=1.0,<2",
     "langgraph-checkpoint-sqlite>=3,<4",
@@ -35,5 +36,6 @@ include = [
 testpaths = ["tests"]
 
 [tool.setuptools.package-data]
-tools = ["data/*.txt"]
-cli = ["pi/app.mjs", "pi/view.mjs", "pi/bridge.mjs", "pi/setup.mjs", "pi/setup-app.mjs", "pi/package.json", "pi/package-lock.json"]
+core = ["prompt_templates/*.md"]
+tools = ["data/*.txt", "data/*.yaml", "data/skills/*.md"]
+cli = ["tui/app.mjs", "tui/view.mjs", "tui/layout.mjs", "tui/bridge.mjs", "tui/setup.mjs", "tui/setup-app.mjs", "tui/package.json", "tui/package-lock.json"]

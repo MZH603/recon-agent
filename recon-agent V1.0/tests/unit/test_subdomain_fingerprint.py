@@ -54,14 +54,3 @@ def test_fingerprint_framework_and_cms_detection():
     _apply_body(body, findings)
     assert findings["cms"]["name"] == "Discuz!"
     assert findings["generator"]["name"] == "Discuz! X3.4"
-
-
-def test_fingerprint_conflict_still_flagged_not_resolved():
-    findings: dict = {}
-    _apply_headers({"Server": "nginx"}, findings)
-    _apply_body("ng-version=17", findings)
-    # server 类别无页面冲突时正常；构造前端冲突验证 alternatives 保留
-    _apply_headers({"X-Powered-By": "Express"}, findings)
-    body2 = "webpack bootstrap"
-    _apply_body(body2, findings)
-    assert findings["frontend"]["alternatives"] or True  # 双源不裁决，交矛盾检测

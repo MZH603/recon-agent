@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import socket
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -49,6 +50,11 @@ class BuiltinPortScan(BaseTool):
         """逐端口 Connect：refused=关闭（这是答案不是失败）；timeout=失败→立即停止。"""
         assert isinstance(params, BuiltinScanParams)
         host = normalize_host(params.target)
+        from platforms.sync_worker import resolve_addresses
+        addresses = await resolve_addresses(host, None)
+        if not addresses:
+            return ToolResult.err(self.name, '目标没有可解析的地址')
+        address = addresses[0][4][0]
         open_ports: list[int] = []
         closed: list[int] = []
         stopped_early = False
@@ -59,7 +65,7 @@ class BuiltinPortScan(BaseTool):
             async with self._limiter.slot():
                 try:
                     _, writer = await asyncio.wait_for(
-                        asyncio.open_connection(host, port),
+                        asyncio.open_connection(address, port),
                         timeout=self._settings.CONNECT_TIMEOUT,
                     )
                     open_ports.append(port)

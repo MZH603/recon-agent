@@ -18,6 +18,7 @@ def test_split_target_host_port():
 def test_split_target_url_forms():
     assert split_target("https://example.com") == ("example.com", None, "https")
     assert split_target("http://example.com:8080/x") == ("example.com", 8080, "http")
+    assert split_target("http://127.0.0.1:9000/a") == ("127.0.0.1", 9000, "http")
 
 
 def test_split_target_ipv6():
@@ -41,7 +42,7 @@ def test_normalize_host_strips_scheme_path_port():
 
 def test_normalize_host_ipv6_preserved():
     assert normalize_host("2001:db8::1") == "2001:db8::1"
-    assert normalize_host("http://[::1]:8080/") == "[::1]" or normalize_host("http://[::1]:8080/") in ("::1", "[::1]")
+    assert normalize_host("http://[::1]:8080/") in ("::1", "[::1]")
 
 
 # ---- allowed_target：各形态目标的合规判定 ----

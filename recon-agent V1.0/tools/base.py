@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+from typing import Literal
 
 
 class ToolResult(BaseModel):
@@ -20,6 +21,26 @@ class ToolResult(BaseModel):
     confidence: float = 1.0                    # 置信度（降级自动下调一档）
     degraded: bool = False                     # HARD: 是否降级模式
     error: str = ""
+    status: Literal['success', 'partial', 'failure', 'timeout', 'cancelled'] = 'success'
+    summary: str = ''
+    artifacts: list[dict] = Field(default_factory=list)
+    error_code: str = ''
+    elapsed_seconds: float = 0
+    timeout_seconds: float = 0
+    cancellation_status: str = ''
+    outcome_unknown: bool = False
+    raw_artifact_id: str = ''
+    artifact_error: str = ''
+    execution_id: str = ''
+    started_at: str = ''
+
+    @model_validator(mode='before')
+    @classmethod
+    def legacy_status(cls, value):
+        if isinstance(value, dict) and 'status' not in value:
+            value = dict(value)
+            value['status'] = 'success' if value.get('success') else 'failure'
+        return value
 
     @classmethod
     def err(cls, name: str, msg: str) -> "ToolResult":
@@ -34,6 +55,8 @@ class BaseTool(ABC):
     description: str = ""
     risk_level: str = "低"   # 低 | 中 | 高
     min_level: int = 0       # HARD: 0=L0 被动可用；1=L1；2=L2（三级门控）
+    cacheable: bool = True  # Completed signature reuse is unsafe for stateful connectors.
+    remote_execution: bool = False  # Local cancellation cannot prove remote work stopped.
     params_model: type[BaseModel]
 
     def brief(self) -> str:

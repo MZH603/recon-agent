@@ -24,7 +24,7 @@ from observability.metrics import TaskMetrics
 from output.report_builder import ReportBuilder
 from scripts.demo_l2 import PROBE_CODE
 from tools.registry import build_default
-from utils.config import get_settings
+from utils.config import Settings, get_settings
 from utils.logger import audit, err, info, ok, section, warn
 
 MAIN_PORTS = "80,443,22,8080,8443,3389,3306,5432,6379,9929,31337"
@@ -218,58 +218,62 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
         err(f"沙箱探针: {probe.error[:120]}")
 
 
-async def run(target: str, authorized: bool, level: int, auto_confirm: bool, note: str) -> int:
-    settings = get_settings()
+async def run(target: str, authorized: bool, level: int, auto_confirm: bool, note: str,
+              settings: Settings | None = None) -> int:
+    settings = settings or get_settings()
     if not authorized:
         err("必须 --authorized（HARD）")
         return 2
     gate = make_cascade_gate(target, level, auto_confirm)
     registry = build_default(settings, gate, target)
-    if note:
-        audit("cascade_authorization", {"target": target, "level": level, "note": note})
-        info(f"授权背景已记录: {note}")
-    builder = ReportBuilder(target, scan_level=0,
-                            strategy_note=f"级联扫描 L0→L{level}（高级别自动包含全部低等级）")
-    state = load_state(target)
-    done_hosts = set(state["done"])
-    builder.data.port_map.update(state["port_map"])
-    builder.add_tech_cards(state["deep_cards"])
-
-    alive = await stage_l0(target, registry, builder, settings)
-    state["subdomains"] = builder.data.subdomains
-    state["alive"] = alive
-
-    violations = 0
-    if level >= 1 and gate.current_level() >= 1:
-        violations = await stage_l1(target, alive, registry, builder, state)
+    try:
+        if note:
+            audit("cascade_authorization", {"target": target, "level": level, "note": note})
+            info(f"授权背景已记录: {note}")
+        builder = ReportBuilder(target, scan_level=0,
+                                strategy_note=f"级联扫描 L0→L{level}（高级别自动包含全部低等级）")
+        state = load_state(target)
+        done_hosts = set(state["done"])
         builder.data.port_map.update(state["port_map"])
-    if level >= 2:
-        plan = f"级联 L2：深度指纹 {len(alive)} 台 + 定向路径枚举（从指纹卡片动态选取）"
-        for step in (1, 2, 3):
-            granted, text = await gate.request_level_2_step(step, plan=plan)
-            if not granted:
-                err(f"L2 门控第 {step}/3 步未通过（{text!r}）→ 以当前级别 L{gate.current_level()} 出报告")
-                level = gate.current_level()
-                break
-        else:
-            ok(f"L2 已解锁，签名校验: {gate.verify_signature()}")
-            await stage_l2(target, alive, registry, builder, state, done_hosts)
+        builder.add_tech_cards(state["deep_cards"])
 
-    builder.data.scan_level = gate.current_level()
-    metrics = TaskMetrics()
-    metrics.tool_calls = len(builder.data.tech_cards) + len(builder.data.risk_paths) + 1
-    metrics.tool_success = len([c for c in builder.data.tech_cards if not c.get("error")])
-    metrics.scan_level_reached = gate.current_level()
-    metrics.stealth_violations = violations
-    builder.data.next_steps = _build_next_steps(builder.data, gate.current_level())
-    builder.data.raw_refs = [
-        "审计日志: %APPDATA%\\recon-agent\\audit.log（哈希链）",
-        f"状态文件: {_state_path(target)}",
-    ]
-    paths = builder.save(metrics)
-    section("级联扫描完成")
-    ok(f"级别 L{gate.current_level()} · 标准报告: {paths['markdown']}")
-    return 0
+        alive = await stage_l0(target, registry, builder, settings)
+        state["subdomains"] = builder.data.subdomains
+        state["alive"] = alive
+
+        violations = 0
+        if level >= 1 and gate.current_level() >= 1:
+            violations = await stage_l1(target, alive, registry, builder, state)
+            builder.data.port_map.update(state["port_map"])
+        if level >= 2:
+            plan = f"级联 L2：深度指纹 {len(alive)} 台 + 定向路径枚举（从指纹卡片动态选取）"
+            for step in (1, 2, 3):
+                granted, text = await gate.request_level_2_step(step, plan=plan)
+                if not granted:
+                    err(f"L2 门控第 {step}/3 步未通过（{text!r}）→ 以当前级别 L{gate.current_level()} 出报告")
+                    level = gate.current_level()
+                    break
+            else:
+                ok(f"L2 已解锁，签名校验: {gate.verify_signature()}")
+                await stage_l2(target, alive, registry, builder, state, done_hosts)
+
+        builder.data.scan_level = gate.current_level()
+        metrics = TaskMetrics()
+        metrics.tool_calls = len(builder.data.tech_cards) + len(builder.data.risk_paths) + 1
+        metrics.tool_success = len([c for c in builder.data.tech_cards if not c.get("error")])
+        metrics.scan_level_reached = gate.current_level()
+        metrics.stealth_violations = violations
+        builder.data.next_steps = _build_next_steps(builder.data, gate.current_level())
+        builder.data.raw_refs = [
+            "审计日志: %APPDATA%\\recon-agent\\audit.log（哈希链）",
+            f"状态文件: {_state_path(target)}",
+        ]
+        paths = builder.save(metrics)
+        section("级联扫描完成")
+        ok(f"级别 L{gate.current_level()} · 标准报告: {paths['markdown']}")
+        return 0
+    finally:
+        await registry.aclose()
 
 
 def _build_next_steps(data, level: int) -> list[dict]:

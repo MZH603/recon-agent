@@ -16,18 +16,30 @@ def test_duplicate_call_hits_cache(tmp_path):
     assert dedup.should_skip(call, "example.com")[0]  # HARD: TTL 内命中 → 不执行不调 LLM
 
 
-def test_budget_three_tiers():
-    guard = BudgetGuard(max_tokens=100, max_cost=100.0)
+def test_cost_budget_thresholds():
+    guard = BudgetGuard(max_cost=100.0)
     assert guard.state() is BudgetState.HEALTHY and guard.allows(2)
-    guard.register(65, 0)
-    assert guard.state() is BudgetState.WARNING and not guard.allows(2) and guard.allows(1)
-    guard.register(20, 0)
-    assert guard.state() is BudgetState.CONVERGING and guard.allows(0) and not guard.allows(1)
-    guard.register(20, 0)
-    assert guard.state() is BudgetState.EXHAUSTED and guard.watermark_required()
+    guard.register(65, 0, cost=65)
+    assert guard.state() is BudgetState.WARNING and guard.allows(2) and guard.allows(1)
+    guard.register(20, 0, cost=20)
+    assert guard.state() is BudgetState.CONVERGING and guard.allows(0) and guard.allows(1) and guard.allows(2)
+    guard.register(20, 0, cost=20)
+    assert guard.state() is BudgetState.EXHAUSTED and not guard.allows(0) and not guard.allows(2) and guard.watermark_required()
     import pytest
     with pytest.raises(BudgetExhausted):
         guard.check()
+
+
+def test_cumulative_tokens_never_exhaust_even_a_legacy_token_cap():
+    guard = BudgetGuard(max_tokens=10, max_cost=2)
+    guard.register(1_000_000, 1_000_000, cost=0.1)
+    assert guard.used_tokens == 2_000_000
+    assert guard.check() is BudgetState.HEALTHY
+    assert guard.allows(2) and not guard.watermark_required()
+
+
+def test_budget_guard_defaults_to_no_token_limit():
+    assert BudgetGuard().max_tokens == 0
 
 
 def test_context_trimmer_reduces_tokens():
@@ -51,12 +63,11 @@ def test_unchanged_result_skipped_incrementally():
     assert not inc.is_unchanged("example.com", "dns_query", "A: 5.6.7.8")
 
 
-def test_template_compression_saves_tokens():
+def test_template_compression_preserves_parsed_ports():
     nmap_out = "Starting Nmap 7.94...\n80/tcp   open  http\n443/tcp  open  https\nNmap done\n"
     packed = compress("nmap_scan", nmap_out)
     assert packed and packed["ports"] == [
         {"port": 80, "state": "open", "service": "http"},
         {"port": 443, "state": "open", "service": "https"},
     ]
-    assert len(str(packed)) < len(nmap_out) or True  # 结构化后可仅注入变量部分
     assert compress("unknown_tool", "raw") is None
