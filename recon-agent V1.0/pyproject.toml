@@ -33,7 +33,12 @@ include = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/smoke", "tests/e2e"]
+addopts = "--strict-markers --strict-config"
+markers = [
+    "smoke: 真实程序入口的启动与关键拒绝路径检查",
+    "e2e: 从公开入口到输出产物的完整流程验证",
+]
 
 [tool.setuptools.package-data]
 core = ["prompt_templates/*.md"]

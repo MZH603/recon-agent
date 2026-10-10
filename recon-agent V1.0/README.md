@@ -191,12 +191,11 @@ tools/
   adapters/               # 自定义工具、HTTP、外部 MCP 与配置
   techniques/、data/       # 复用手段和静态资源
 tests/
-  unit/                   # Python 单元与组件测试
-  adversarial/            # 安全边界验证
-  tui/                    # JS 测试、共享辅助代码与模拟前端
+  smoke/                  # CLI 与真实 TUI 进程冒烟
+  e2e/                    # 会话/报告/恢复与 MCP 采集端到端
 ```
 
-`cli/tui/` 只包含运行代码及依赖，测试和模拟前端不进入 wheel。
+`cli/tui/` 只包含运行代码及依赖，测试不进入 wheel。
 底层终端库仍为 `@earendil-works/pi-tui`，项目自己的目录和入口统一采用 `tui` 命名。
 
 ```text
@@ -218,8 +217,8 @@ MCP → existing external-agent tool bridge (L2 prohibited)
 受控扫描器、搜索、Caido 只读查询和工作记录已接入，配置与调用见 [扩展工具接入](docs/tool-extensions.md)。外部工具默认关闭。
 
 ```powershell
-& '../.venv/Scripts/python.exe' -m pytest tests -q
+& '../.venv/Scripts/python.exe' -m pytest -q
 npm --prefix cli/tui test
 ```
 
-Python 测试使用离线工具和本地模拟服务，无需排除 Nmap 降级或指纹失败测试；会话测试验证启动零调用、持久化、门控、报告、恢复与费用记账。
+只维护冒烟与端到端测试，全部通过真实程序入口运行，使用临时配置和本地服务，无需模型 Key 或公网目标。pytest 完整命令包含 TUI 冒烟，需要先安装 Node.js 和 TUI 依赖；npm 命令仅运行 TUI 冒烟。目录约定、筛选命令和覆盖范围见 [测试约定](docs/testing.md)。

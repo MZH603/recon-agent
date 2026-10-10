@@ -6,6 +6,7 @@
 
 - [安装与快速开始](<recon-agent V1.0/README.md>)
 - [当前架构](<recon-agent V1.0/docs/architecture.md>)
+- [测试约定（冒烟与端到端）](<recon-agent V1.0/docs/testing.md>)
 - [工具集成](<recon-agent V1.0/docs/tool-integrations.md>)
 - [扩展工具](<recon-agent V1.0/docs/tool-extensions.md>)
 - [使用说明书](<recon-agent V1.0/docs/使用说明书.md>)
