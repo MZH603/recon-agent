@@ -42,7 +42,8 @@ server/                        向外提供 MCP 服务
 scripts/                       确定性扫描与辅助脚本
 knowledge/、observability/     CVE/快照、指标
 utils/                         配置、日志和缓存
-tests/                         Python 与 JS 测试；tests/tui/ 含模拟前端
+tests/smoke/                   CLI 与真实 TUI 进程冒烟
+tests/e2e/                     会话/报告/恢复与 MCP 采集端到端
 ```
 
 ## 会话主链路
@@ -96,7 +97,7 @@ Agent 主循环为 `decide → validate → authorize → execute → evaluate`�
 `hallucination.evidence.EvidenceStore` 是内存登记簿，
 `tools.runtime.evidence_store.EvidenceStore` 是磁盘证据库，两者用途不同。
 
-运行代码与测试分开；wheel 包含提示词模板、工具数据与 TUI 运行资源，不包含测试或模拟前端。
+运行代码与测试分开；wheel 包含提示词模板、工具数据与 TUI 运行资源，不包含测试。
 新增工具修改对应子包，通过注册表接入；新增界面复用会话工厂。
 
 ## 验证命令
@@ -104,8 +105,8 @@ Agent 主循环为 `decide → validate → authorize → execute → evaluate`�
 在项目目录使用仓库已有虚拟环境：
 
 ```powershell
-& '../.venv/Scripts/python.exe' -m pytest tests -q
+& '../.venv/Scripts/python.exe' -m pytest -q
 npm --prefix cli/tui test
 ```
 
-Python 全套测试使用本地模拟服务和离线桩，不需要额外过滤联网测试。
+仅维护冒烟与端到端测试。应用通过真实子进程运行，使用临时配置和本地服务，不替换业务内部组件，也不调用公网模型或目标。完整 pytest 命令包含 TUI 冒烟，要求本地 Node/TUI 依赖已安装。详见 [测试约定](testing.md)；CI 位于仓库根目录 `.github/workflows/ci.yml`。
