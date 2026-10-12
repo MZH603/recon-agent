@@ -6,6 +6,7 @@ const plain=text=>text;
 const markdownKeys=['heading','link','linkUrl','code','codeBlock','codeBlockBorder','quote','quoteBorder','hr','listBullet','bold','italic','strikethrough','underline'];
 const normalized=text=>String(text??'').trimEnd();
 const seconds=value=>Number(value??0).toFixed(1).replace(/\.0$/,'');
+const spinnerFrames=['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
 
 export function createView(terminal,send,onExit=()=>{},options={}) {
  const tui=new TuiMainScreen(terminal),transcript=new Container(),bottom=new Container();
@@ -47,6 +48,7 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
  editor.setAutocompleteProvider(slashProvider);
  const previews=new Map(),shown=new Set(),tools=new Map();
  let pendingShown=null,statusRequests=0,activity='';
+ let started=false,animationTimer=null,spinnerIndex=0;
  const view={tui,transcript,editor,busy:false,exitCode:0,currentState:{status:'idle'}};
  // Plain content is painted at render time so existing text follows theme changes.
  function dynamic(text,attrs={}) {
@@ -61,7 +63,7 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
  }};
  const hint=dynamic(()=>/^\/budget(?:\s|$)/i.test(editor.getText())?'用法: /budget cost USD · 例如 /budget cost 1':'',{muted:true});
  const footer={invalidate(){},render(width){return [inputFooter(view.currentState,width,paint)];}};
- const live={invalidate(){},render(width){return activity?new Text(muted(activity),1,0).render(width).slice(0,1):[];}};
+ const live={invalidate(){},render(width){return activity?new Text(muted(spinnerFrames[spinnerIndex]+' '+activity),1,0).render(width).slice(0,1):[];}};
  const layout=new ConversationLayout(transcript,bottom,paint,text=>color?text:text.replace(/\x1b\[[0-9;:]*m/g,''));
  view.layout=layout;tui.addChild(layout);bottom.addChild(state);bottom.addChild(live);bottom.addChild(editor);bottom.addChild(footer);bottom.addChild(hint);tui.setFocus(editor);
  function note(text,attrs={}){if(text)transcript.addChild(dynamic(text,attrs));}
@@ -71,8 +73,16 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
    transcript.addChild(new Markdown(text,1,0,theme));shown.add(text);
   }
  }
- function loading(text){view.busy=true;if(text)activity=text;}
- function idle(){view.busy=false;activity='';}
+ function syncAnimation() {
+  if(started&&view.busy) {
+   if(animationTimer===null)animationTimer=setInterval(()=>{
+    spinnerIndex=(spinnerIndex+1)%spinnerFrames.length;
+    tui.requestRender();
+   },100);
+  }else if(animationTimer!==null){clearInterval(animationTimer);animationTimer=null;}
+ }
+ function loading(text){view.busy=true;if(text)activity=text;syncAnimation();}
+ function idle(){view.busy=false;activity='';syncAnimation();}
  function details() {
   note('最近工具详情（桥接传输已限长；完整证据请查看产物）',{muted:true});
   if(!tools.size)note('暂无工具结果。',{muted:true});
@@ -102,12 +112,12 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
   if(matchesKey(data,Key.ctrl('c'))){view.exitCode=130;send({type:'cancel',exit:true});loading('正在取消并保存…');tui.requestRender();return {consume:true};}
  };
  tui.addInputListener(view.handleInput);
- function toolHeader(event) {
+ function toolHeader(event,withSpinner=true) {
   const result=event.result??{};
   if(event.phase==='tool_late')return (event.name??'工具')+' · 迟到结果（仅诊断，不计为正常完成）';
   let status,glyph;
-  if(event.phase==='tool_start'){status='开始执行';glyph='⠋ ';}
-  else if(event.phase==='tool_wait'){status='执行中 '+seconds(event.elapsed_seconds)+'s'+(event.timeout_seconds==null?'':' / '+seconds(event.timeout_seconds)+'s');glyph='⠹ ';}
+  if(event.phase==='tool_start'){status='开始执行';glyph=withSpinner?spinnerFrames[spinnerIndex]+' ':'';}
+  else if(event.phase==='tool_wait'){status='执行中 '+seconds(event.elapsed_seconds)+'s'+(event.timeout_seconds==null?'':' / '+seconds(event.timeout_seconds)+'s');glyph=withSpinner?spinnerFrames[spinnerIndex]+' ':'';}
   else if(event.phase==='tool_cancelled'){status='已取消等待';glyph='⊘ ';}
   else {
    const outcome=result.status??(event.success?'success':'failure');
@@ -153,7 +163,7 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
   let item=tools.get(id);
   if(!item){item={event:{}};tools.set(id,item);transcript.addChild(toolComponent(item));}
   item.event={...item.event,...event};
-  if(event.phase==='tool_start'||event.phase==='tool_wait')loading(toolHeader(event));
+  if(event.phase==='tool_start'||event.phase==='tool_wait')loading(toolHeader(event,false));
   else if(view.busy)activity=event.phase==='tool_cancelled'?'工具已取消，正在保存…':'工具已返回，继续处理…';
  }
  view.handle=event=>{
@@ -202,12 +212,12 @@ export function createView(terminal,send,onExit=()=>{},options={}) {
     }else pendingShown=null;
     break;
    }
-   case 'shutdown':view.exitCode=event.code??view.exitCode;onExit(view.exitCode);break;
+   case 'shutdown':idle();view.exitCode=event.code??view.exitCode;onExit(view.exitCode);break;
   }
   tui.requestRender();
  };
  const unsubscribe=tui.onTerminalColorSchemeChange(next=>{if(!automaticTheme)return;scheme=next;layout.invalidate();tui.requestRender();});
- view.start=()=>{tui.start();if(color&&automaticTheme)tui.setTerminalColorSchemeNotifications(true);};
- view.stop=()=>{idle();unsubscribe();tui.stop();terminal.write=terminalWrite;};
+ view.start=()=>{tui.start();started=true;syncAnimation();if(color&&automaticTheme)tui.setTerminalColorSchemeNotifications(true);};
+ view.stop=()=>{started=false;idle();unsubscribe();tui.stop();terminal.write=terminalWrite;};
  return view;
 }

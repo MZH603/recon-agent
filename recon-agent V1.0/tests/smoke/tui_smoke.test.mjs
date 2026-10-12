@@ -258,3 +258,43 @@ test('input footer places model on the left and token compression hints on the r
   assert.match(line,/model.*\s{2,}.*500/,'narrow footer keeps a visible model name');
   await narrow.finish();
 });
+
+for(const extraEnv of [{},{NO_COLOR:'1'}]) {
+  test('waiting animation advances without bridge events and stops while idle'+(extraEnv.NO_COLOR?' with NO_COLOR':''),{timeout:20000},async t=>{
+    const app=await sessionFixture(t,extraEnv);
+    const frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+    async function advances(label,emit,marker) {
+      const before=app.raw().length;
+      emit();
+      await app.waitFor(()=>stripVTControlCharacters(app.raw().slice(before)).includes(marker),label+' initial render');
+      // No more bridge events: the frontend must drive all subsequent frames.
+      await delay(550);
+      const output=stripVTControlCharacters(app.raw().slice(before));
+      const found=[...output.matchAll(new RegExp('(['+frames+']) '+marker,'g'))].map(match=>match[1]);
+      assert.ok(new Set(found).size>=3,label+' must advance through at least three distinct frames: '+output);
+      assert.doesNotMatch(output,new RegExp('['+frames+'] ['+frames+'] '+marker),label+' must show only one spinner');
+    }
+    async function stops(label,event,marker) {
+      app.emit(event);
+      await app.waitFor(()=>app.read().includes(marker),label+' state render');
+      await delay(200); // Let the event render and any already queued terminal write settle.
+      const settled=app.raw().length;
+      await delay(350);
+      assert.equal(app.raw().length,settled,label+' must stop ongoing terminal output');
+    }
+    await advances('thinking',()=>app.emit({type:'activity',text:'模型思考中 · 已接收 17 字符'}),'模型思考中');
+    await stops('paused',{type:'state',status:'paused',busy:false,pending:{kind:'clarification',question:'animation-paused',options:[]}},'animation-paused');
+    await advances('resumed thinking',()=>app.emit({type:'activity',text:'恢复模型思考'}),'恢复模型思考');
+    await advances('tool start',()=>app.emit({type:'tool',phase:'tool_start',execution_id:'animation-tool',name:'animation_fixture'}),'animation_fixture · 开始执行');
+    await advances('tool wait',()=>app.emit({type:'tool',phase:'tool_wait',execution_id:'animation-tool',name:'animation_fixture',elapsed_seconds:2,timeout_seconds:20}),'animation_fixture · 执行中 2s');
+    app.emit({type:'tool',phase:'tool_end',execution_id:'animation-tool',name:'animation_fixture',success:true,elapsed:3,result:{status:'success',summary:'animation-result'}});
+    await app.waitFor(()=>app.read().includes('✓ animation_fixture · 完成 · 3s'),'completed tool marker');
+    await stops('completed',{type:'state',status:'completed',busy:false},'已完成');
+    const beforeResume=app.raw().length;
+    await advances('resumed after completion',()=>app.emit({type:'activity',text:'再次等待模型'}),'再次等待模型');
+    assert.doesNotMatch(stripVTControlCharacters(app.raw().slice(beforeResume)),new RegExp('['+frames+'] animation_fixture · 完成'),'completed tool marker must stay static');
+    if(extraEnv.NO_COLOR)assert.doesNotMatch(app.raw(),/\x1b\[[0-9;:]*m/);
+    assert.equal(app.commands.length,0,'animation never sends runtime commands');
+    await app.finish(); // Shutdown while actively animating must clear the timer and exit normally.
+  });
+}
