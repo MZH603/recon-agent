@@ -4,7 +4,7 @@
 
 ## 目录与范围
 
-- `tests/smoke/`：真实 CLI 子进程的 help/version/工具目录、启动参数拒绝和 MCP 授权范围要求；真实 TUI 页面进程的启动、认证握手、渲染与正常退出。
+- `tests/smoke/`：真实 CLI 子进程的 help/version/工具目录、启动参数拒绝和 MCP 授权范围要求；真实 TUI 页面进程的启动、认证握手、渲染与正常退出。TUI 自动化通过真实 `app.mjs`、标准输入按键和本地 TCP 桥测试命令菜单、过滤与补全、控制帧、本地命令校验、工具开始及更新、摘要限长和显式详情、异常与迟到诊断、窄屏状态、主题及忙碌草稿。
 - `tests/e2e/`：CLI 会话创建、三格式报告、新进程恢复；MCP 的 stdio 握手、工具列表、策略查询、范围/L1/L2 拦截，以及本地 HTTP 指纹采集与证据/审计落盘。
 - `tests/conftest.py`：子进程启动与临时环境隔离，不导入或替换业务内部实现。
 
@@ -27,4 +27,4 @@ npm --prefix cli/tui test        # 仅 TUI 进程冒烟
 
 已有仓库虚拟环境时，Windows 可将 `python` 替换为 `& '../.venv/Scripts/python.exe'`。pytest 使用严格 marker 配置，默认只发现 `tests/smoke/` 和 `tests/e2e/`。
 
-仓库根目录 `.github/workflows/ci.yml` 在 Windows/Linux 上执行相同完整命令。缺少 Node 或 TUI 依赖时测试明确失败，不通过 skip 隐藏安装问题。终端按键操作、全流程 TUI 会话和真实模型/公网扫描不在当前自动测试范围；发布前可按实际配置手动冒烟，结果单独记录。
+仓库根目录 `.github/workflows/ci.yml` 在 Windows/Linux 上执行相同完整命令。缺少 Node 或 TUI 依赖时测试明确失败，不通过 skip 隐藏安装问题。已覆盖的终端按键与桥接操作使用本地 fixture；完整 Python↔TUI 交互、实际终端颜色通知差异和真实模型/公网扫描仍需按实际配置手动冒烟，结果单独记录。
