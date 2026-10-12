@@ -71,7 +71,9 @@ class ExecutionNodes:
         started = monotonic()
         result = None
         try:
-            self._emit('tool_start', name=call['name'], execution_id=call['execution_id'])
+            from utils.display import display_arguments
+            self._emit('tool_start', name=call['name'], execution_id=call['execution_id'],
+                       arguments=display_arguments(arguments))
             def progress(payload):
                 self._emit('tool_late' if payload.get('status')=='late' else 'tool_wait', **payload)
             result = (await self.registry.execute(NormalizedToolCall(id=call['id'], name=call['name'], arguments=arguments),

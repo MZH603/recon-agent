@@ -43,4 +43,4 @@ markers = [
 [tool.setuptools.package-data]
 core = ["prompt_templates/*.md"]
 tools = ["data/*.txt", "data/*.yaml", "data/skills/*.md"]
-cli = ["tui/app.mjs", "tui/view.mjs", "tui/layout.mjs", "tui/bridge.mjs", "tui/setup.mjs", "tui/setup-app.mjs", "tui/package.json", "tui/package-lock.json"]
+cli = ["tui/app.mjs", "tui/view.mjs", "tui/layout.mjs", "tui/commands.mjs", "tui/bridge.mjs", "tui/setup.mjs", "tui/setup-app.mjs", "tui/package.json", "tui/package-lock.json"]

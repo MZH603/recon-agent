@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import sys
 import shlex
+import os
 
 from rich.console import Console
 from cli.tui_bridge import TUI_DIR, TuiBridge, ProtocolError, child_environment, tui_available
@@ -23,6 +24,9 @@ class TuiProgress(SessionProgress):
         self.plan_shown = None
         self.task_id = None
         self.pending_preview_key = None
+        self.llm = None
+        self.model_label = self.primary_model_label = ''
+        self.model_fallback = False
         from tools.runtime.result_payload import ResultPayloads
         from utils.config import Settings
         self.display_payloads = ResultPayloads(Settings(TOOL_RESULT_MAX_BYTES=16000))
@@ -53,7 +57,23 @@ class TuiProgress(SessionProgress):
             return
         if event['kind'] == 'model_start':
             self.turn += 1
-        # Pi owns its expandable tool cards; plain CLI's printed summaries would
+            self.model_fallback = False
+            self.model_label = self.primary_model_label
+        if event['kind'] == 'fallback':
+            from utils.display import display_text
+            name = getattr(event.get('delta'), 'name', '')
+            if name:
+                self.model_label = display_text(name, 128)
+                self.model_fallback = True
+        elif event['kind'] in ('model_start', 'delta', 'retry', 'model_end') and not self.model_fallback:
+            # The lazy service may now exist. Its constructed provider order
+            # excludes missing credentials and resolves configured aliases.
+            provider = getattr(getattr(self.llm, 'service', None), 'provider', None)
+            names = getattr(provider, '_names', ())
+            if names:
+                from utils.display import display_text
+                self.model_label = display_text(names[0], 128)
+        # Pi owns tool entries; plain CLI's printed summaries would
         # otherwise duplicate the same tool result in the conversation.
         if event['kind'] == 'tool_end':
             self.label = '工具已返回，继续处理'
@@ -61,7 +81,7 @@ class TuiProgress(SessionProgress):
             self.label = f"工具 {safe_text(event['name'])} 执行中"
         else:
             super().__call__(event)
-        if event['kind'] in ('tool_wait','tool_end','tool_cancelled','tool_late'):
+        if event['kind'] in ('tool_start','tool_wait','tool_end','tool_cancelled','tool_late'):
             def clean(value):
                 if isinstance(value,str): return safe_text(value)
                 if isinstance(value,list): return [clean(v) for v in value]
@@ -72,7 +92,7 @@ class TuiProgress(SessionProgress):
                 payload['result']=self.display_payloads.for_model(payload['result'])
             self.bridge.emit({'type':'tool','phase':event['kind'],**payload})
         if event['kind'] != 'tool_late':
-            self.bridge.emit({'type': 'activity', 'text': safe_text(self.label)})
+            self.bridge.emit({'type': 'activity', 'text': safe_text(self.label), 'model': self.model_label})
 
 
 class EventStream(io.TextIOBase):
@@ -122,7 +142,8 @@ def display_state(state, gate, progress):
               'level': gate.current_level(), 'decisions': state.get('decisions', 0),
               'actions': state.get('actions', 0), 'used_tokens': state.get('used_tokens', 0)}
     for key in ('task_id','max_tokens','max_cost','used_cost','session_used_tokens','session_used_cost','usage_estimated_calls','cost_unknown_calls'):
-        result[key]=state.get(key,0 if key!='task_id' else '')
+        result[key]=state.get(key)
+    result['model'] = getattr(progress, 'model_label', '')
     for key in CONTEXT_FIELDS:
         result[key] = state.get(key)
     result['result_count']=len(state.get('results',[]))
@@ -185,6 +206,20 @@ def display_state(state, gate, progress):
 async def serve_runtime(runtime, gate, bridge, report=None):
     """Input stays responsive while one graph task runs; cancellation awaits durability."""
     progress = TuiProgress(bridge)
+    # Configuration only: never construct a provider, or serialize connection/key data.
+    from utils.display import display_text
+    connection = getattr(runtime.llm, 'connection_override', None)
+    configured = getattr(getattr(runtime.llm, 'settings', None), 'model', None)
+    configured_name = getattr(runtime.llm, 'model', None) or os.environ.get('RECON_MODEL', '').strip() or getattr(configured, 'name', '')
+    for endpoint in getattr(configured, 'custom_endpoints', []):
+        if configured_name in (endpoint.get('name'), endpoint.get('model')):
+            configured_name = endpoint.get('model') or configured_name
+            break
+    progress.model_label = display_text(getattr(connection, 'model', None) or
+        getattr(getattr(runtime.llm, 'service', None), 'model_name', None) or
+        configured_name or '未知', 128)
+    progress.primary_model_label = progress.model_label
+    progress.llm = runtime.llm
     active = None
     exit_code = 0
 
@@ -244,6 +279,7 @@ async def serve_runtime(runtime, gate, bridge, report=None):
                 bridge.emit(display_state(state, gate, progress))
             elif kind == 'status':
                 event = display_state(await runtime.state(), gate, progress)
+                event['status_requested'] = True
                 event['busy'] = bool(active and not active.done())
                 if event['busy']:
                     event['status'] = 'running'
@@ -344,7 +380,7 @@ async def run_tui_session(target, settings, batch, is_tty, requested_level, mode
                 bridge.emit({'type': 'note', 'text': f'会话 ID: {safe_text(identifier)} · 当前 L0，等待任务。'})
                 bridge.emit({'type': 'note', 'text': '恢复命令: recon-agent --session --resume ' +
                     shlex.quote(safe_text(identifier)) + ' -t ' + shlex.quote(safe_text(target)) + ' --authorized'})
-                bridge.emit({'type': 'note', 'text': '命令: /new 新任务 · /budget cost USD · status · report · stop · abort · quit；F2 侧栏 · F3 详情；Shift+Enter 换行'})
+                bridge.emit({'type': 'note', 'text': '输入 / 查看命令；/help 查看帮助。Shift+Enter 换行。'})
                 result = await serve_runtime(runtime, gate, bridge, report)
                 unexpected_disconnect = result == 2
             return result
