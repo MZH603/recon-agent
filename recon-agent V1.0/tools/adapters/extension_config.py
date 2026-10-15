@@ -1,22 +1,12 @@
-"""Optional native tool extensions; no client/process creation on import."""
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+"""Extension tools configuration."""
+from __future__ import annotations
 
-from tools.adapters.scanners import ScannerConfig
-from tools.adapters.search import SearchConfig
-from tools.adapters.proxy import CaidoConfig
-from tools.runtime.workspace import WorkspaceConfig
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ExtensionToolsConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    scanners: list[ScannerConfig] = Field(default_factory=list, max_length=5)
-    search: SearchConfig | None = None
-    caido: CaidoConfig | None = None
-    workspace: WorkspaceConfig = Field(default_factory=WorkspaceConfig)
-    knowledge_enabled: bool = True
-
-    @model_validator(mode='after')
-    def unique_scanners(self):
-        if len({item.kind for item in self.scanners}) != len(self.scanners):
-            raise ValueError('duplicate scanner kind')
-        return self
+    """Configuration for optional extension tools."""
+    model_config = ConfigDict(validate_assignment=True)
+    
+    enabled: bool = Field(default=False, description="Whether extension tools are enabled")
+    tool_dirs: list[str] = Field(default_factory=list, description="Extension tool directory paths")

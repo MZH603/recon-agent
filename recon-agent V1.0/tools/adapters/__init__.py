@@ -1,1 +1,1 @@
-"""Tool adapters responsibilities."""
+

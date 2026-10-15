@@ -1,0 +1,1 @@
+.rar|.zip|.doc|.xls|.xlsx|.torrent|.mp3|.mp4|.rmvb|.txt|.7z|.app|.bak|.ppt|.iso|.exe|.avi|.pdf|.wav|.mpg|.swf|
