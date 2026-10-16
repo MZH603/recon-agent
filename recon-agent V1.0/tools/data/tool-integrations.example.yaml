@@ -1,0 +1,33 @@
+# Optional integrations are visible during setup but disabled until selected.
+custom_tools:
+  - name: optional_status
+    kind: http
+    enabled: false
+    min_level: 1
+    url: "https://{target}/api/status"
+mcp_servers:
+  - name: browser
+    enabled: false
+    transport: stdio
+    command: node
+    args: ["browser-mcp.js"]
+    allowed_tools: ["browser_navigate"]
+    target_fields:
+      browser_navigate: ["url"]
+extension_tools:
+  scanners:
+    - kind: subfinder
+      enabled: false
+    - kind: katana
+      enabled: false
+    - kind: ffuf
+      enabled: false
+    - kind: naabu
+      enabled: false
+    - kind: nuclei
+      enabled: false
+  search:
+    enabled: false
+    provider: exa
+  caido:
+    enabled: false

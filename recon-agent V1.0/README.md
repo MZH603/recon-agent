@@ -2,7 +2,7 @@
 
 授权安全测试的信息搜集工具，提供确定性采集、受控级联、LangGraph 交互会话与 MCP 接入。工具结果通过代码层 Schema、合规、范围、门控及预算校验，输出带来源的 Markdown、JSON、CSV 报告。
 
-仅用于已获合法授权的目标。L0 是受控采集级别；HTTP 指纹、探活和证书 SAN 查询可能向远端发请求，不能理解为全部纯被动。
+**工具优先原则**：遇到扫描或分析问题，优先使用对应内置工具（dns_query→fingerprint→port_scan→dir_enum），无工具时再编写一次性脚本。仅用于已获合法授权的目标。L0 是受控采集级别；HTTP 指纹、探活和证书 SAN 查询可能向远端发请求，不能理解为全部纯被动。
 
 [项目架构](docs/architecture.md) · [扩展工具接入](docs/tool-integrations.md) · [使用说明书](docs/使用说明书.md) · [项目说明书](docs/项目说明书.md) · [知识骨架](docs/知识骨架.md)
 
@@ -60,7 +60,7 @@ Set-Location '.\recon-agent V1.0'
 $env:RECON_MODEL="openai/your-model"
 $env:RECON_API_BASE="https://your-endpoint.example/v1"
 $env:RECON_API_KEY="你的 Key"
-& '..\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized
+& '..\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized -o reports --output-format markdown
 ```
 
 上例使用仓库根目录已有的 `.venv`。模型选择优先级为 `--model` > 非空 `RECON_MODEL` > YAML `name`。
@@ -115,12 +115,13 @@ model:
 
 TUI 宽屏左侧显示对话、右侧显示上下文占用、费用、任务计划、证据与产物；窄屏折叠侧栏。F2 或 `/sidebar` 切换侧栏，PgUp/PgDn 浏览，F3 或 `/details` 展开工具详情。默认暗色青绿主题，`TUI_THEME: light` 适配浅色终端，`NO_COLOR` 禁用配色。
 
-未返回的工具保持执行中，显示已等待秒数和最大等待时间，不凭无输出判断错误。全局默认 120 秒，取消清理最多额外 5 秒；逐工具覆盖优先，其次工具既有配置，再使用全局值。截止后向模型返回 `TOOL_TIMEOUT` 并保留已有输出。远端或未确认停止的执行标为结果未知，相同动作需明确 retry/skip；跳过也保留未知记录。迟到结果只保存诊断，不覆盖超时结算。
+未返回的工具保持执行中，显示已等待秒数和最大等待时间，不凭无输出判断错误。全局默认 120 秒，子域枚举默认 1800 秒（最多资产和递归数据源需要更长预算），取消清理最多额外 5 秒；逐工具覆盖优先，其次工具既有配置，再使用全局值。截止后向模型返回 `TOOL_TIMEOUT` 并保留已有输出。远端或未确认停止的执行标为结果未知，相同动作需明确 retry/skip；跳过也保留未知记录。迟到结果只保存诊断，不覆盖超时结算。
 
 以下项可加在项目 `config.yaml` 顶层；修改后重新启动：
 
 ```yaml
 TOOL_TIMEOUT_SECONDS: 120
+SUBDOMAIN_ENUM_TIMEOUT_SECONDS: 1800
 TOOL_CLEANUP_SECONDS: 5
 TOOL_TIMEOUT_OVERRIDES:
   system_scan: 180
@@ -156,7 +157,7 @@ recon-agent --session -t example.com --authorized -o reports --output-format jso
 | `quit` / `退出` / EOF | 保存并关闭，保留待确认节点 |
 | Ctrl+C | 安全关闭；未完成执行保留为恢复/不确定状态，不自动重试 |
 
-每个新进程从 L0 开始，`--level`/`--profile` 不预先授予会话权限。L1 需一次确认；L2 依次输入 `CONFIRM 2`、目标精确串、`I UNDERSTAND AND AUTHORIZE`，并逐动作确认。重启后重新确认。`--batch` 或非 TTY 永久禁止 L2；`--auto-confirm` 不替会话填写确认码。`--resume` 必须与 `--session` 搭配，会话不能与 `--mcp` 搭配。
+每个新进程从 L0 开始，`--level`/`--profile` 不预先授予会话权限。L1 需一次确认；L2 依次输入 `CONFIRM 2`、目标精确串、`I UNDERSTAND AND AUTHORIZE`，并逐动作确认。重启后重新确认。`--batch`/MCP 永久禁止 L2；非 TTY 默认不代填 L2 确认，授权自动化级联必须显式指定 `--auto-confirm`。该选项不替会话填写确认码。`--resume` 必须与 `--session` 搭配，会话不能与 `--mcp` 搭配。
 
 报告始终保存三种格式，`--output-format` 选择控制台展示的文件，`-o` 指定目录。JSON 保存完整状态、工具 data/stdout/stderr、来源及哈希、失败、事件、冲突和执行日志。相同秒生成也不覆盖。模型摘要标为未验证分析；冲突观测保留双方；未完成/降级结果带水印。费用记录已知金额与未知定价调用数，未知价格时不能证明精确费用上限。累计 token 仅用于计量，不再作为任务上限。
 

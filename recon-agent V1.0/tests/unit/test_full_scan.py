@@ -41,6 +41,31 @@ def test_load_state_per_target_file(tmp_path, monkeypatch):
     assert state["port_map"] == {"a.example.com": [80, 443]}
 
 
+def test_load_state_does_not_mark_failed_l2_items_complete(tmp_path, monkeypatch):
+    import scripts.full_scan as fs
+
+    state_path = tmp_path / "reports" / "scan_state_example_com.json"
+    monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({
+        "deep_cards": [
+            {"host": "good.example.com", "tech": {}},
+            {"host": "failed.example.com", "error": "aborted"},
+        ],
+        "dir_results": [
+            {"target": "good.example.com", "success": True, "data": {}},
+            {"target": "failed.example.com", "success": False, "error": "aborted"},
+        ],
+        "port_map": {},
+    }), encoding="utf-8")
+
+    state = load_state("example.com")
+
+    assert state["done"] == {"good.example.com"}
+    assert [card["host"] for card in state["deep_cards"]] == ["good.example.com"]
+    assert [result["target"] for result in state["dir_results"]] == ["good.example.com"]
+
+
 def test_save_state_merge_semantics(tmp_path, monkeypatch):
     """save_state 读-改-写合并（HARD：不覆盖既有键——历史数据丢失均源于全量覆盖写）。"""
     import scripts.full_scan as fs
@@ -56,3 +81,56 @@ def test_save_state_merge_semantics(tmp_path, monkeypatch):
     merged = json.loads(state_path.read_text(encoding="utf-8"))
     assert merged["subdomains"] == ["a.example.com"]          # 既有键保留
     assert merged["deep_cards"] == [{"host": "b.example.com", "tech": {}}]  # 新键写入
+
+
+def test_l0_failure_stops_instead_of_falling_back_to_root():
+    from model.base import NormalizedToolCall
+    from scripts.full_scan import stage_l0
+    from tools.base import ToolResult
+
+    class FailedRegistry:
+        async def execute(self, call: NormalizedToolCall):
+            return ToolResult.err(call.name, "enumeration timed out")
+
+    result = asyncio.run(stage_l0("example.com", FailedRegistry(), None, None))
+
+    assert result is None
+
+
+def test_l2_abort_stops_remaining_hosts(tmp_path, monkeypatch):
+    import scripts.full_scan as fs
+    from scripts.full_scan import stage_l2
+    from tools.base import ToolResult
+
+    class Gate:
+        level = 2
+
+        def current_level(self):
+            return self.level
+
+    gate = Gate()
+
+    class Registry:
+        calls = 0
+
+        async def execute(self, call):
+            self.calls += 1
+            gate.level = 0
+            return ToolResult.err(call.name, "[门控] 用户中止")
+
+    class Builder:
+        data = type("Data", (), {"tech_cards": []})()
+
+        def add_tech_card(self, card):
+            self.data.tech_cards.append(card)
+
+    registry = Registry()
+    monkeypatch.setattr(fs, "save_state", lambda *_args: None)
+    state = {"deep_cards": [], "dir_results": []}
+
+    asyncio.run(stage_l2(
+        "example.com", ["a.example.com", "b.example.com"], registry, Builder(),
+        state, set(), gate,
+    ))
+
+    assert registry.calls == 1

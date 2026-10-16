@@ -72,14 +72,14 @@
 | 会话有效 | 签名仅当次进程有效，跨会话需重新确认 | 构造时不读取旧签名 |
 | 逐项确认 | 每个具体动作执行前单独确认（不可批量 yes） | gate/scan_gate.py::confirm_step |
 | abort | 任意环节输入 `abort` 立即退回 L0 且不可撤销 | gate/scan_gate.py::abort |
-| 非交互禁 L2 | `--batch` / 无 TTY / MCP 模式 **永久禁止** L2 | 全路径检查 |
-| `--auto-confirm` | 仅限授权测试目标的自动化验证（审计留痕） | scripts/aggressive_l2.py |
+| 非交互禁 L2 | `--batch` / MCP 模式 **永久禁止** L2；无 TTY 默认不代填确认 | 全路径检查 |
+| `--auto-confirm` | 必须显式启用，仅限授权测试目标的自动化级联（审计留痕） | CLI / scripts/aggressive_l2.py |
 
 ### 2.3 级联语义
 
 - `--level N` 自动包含 0..N-1 级（高级别包含低等级）
 - 门控语义不变：L1 需确认，L2 需三次解锁——级联不降低确认标准
-- `--auto-confirm` 仅注入 L2 确认码，**不注入** L1/L0 的跳过（L0 本身无需确认）
+- `--auto-confirm` 仅显式注入 L2 确认码，**不注入** L1/L0 的跳过（L0 本身无需确认）；无 TTY 不再自动开启此选项
 
 ---
 
@@ -97,6 +97,7 @@
 | 浏览器 UA | Chrome/Firefox/Safari 随机，禁自定义扫描器 UA | 全级别 |
 | 失败即停 | ConnectionRefused=答案（继续）；Timeout=失败（**立即停止**） | L1/L2 |
 | 并发上限 | 绝对 ≤2（默认 1），超限自动修正 | 全级别 |
+| L2 HTTP 重定向 | 深度指纹和敏感路径探测拒绝跨主机重定向 | L2 |
 
 ### 3.2 沙箱三层（scripts/sandbox.py）
 
