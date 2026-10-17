@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import http.client
 import ssl
 import urllib.error
 import urllib.request
@@ -43,10 +44,11 @@ def http_get(
         # 4xx/5xx 是有效答案，不是失败
         try:
             body = exc.read(max_bytes).decode("utf-8", errors="replace")
-        except (OSError, ValueError):
+        except (OSError, ValueError, http.client.HTTPException):
             body = ""
         return exc.code, dict(exc.headers or {}), body
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
+        # HARD: 截断响应（IncompleteRead）与连接错误统一收敛为「无答案」，不向上抛异常
         return 0, {}, ""
 
 
