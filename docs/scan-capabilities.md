@@ -10,13 +10,13 @@
 
 | 不变量 | 实现方式 | 代码 |
 |---|---|---|
-| 单线程限速 | `StealthRateLimiter`（Semaphore + 随机延迟） | security/stealth.py |
-| 浏览器 UA | Chrome/Firefox/Safari 随机轮换，禁自定义扫描器 UA | security/stealth.py |
-| 仅 TCP Connect | 禁 SYN/UDP/NULL/XMAS/FIN 等异常 packets | tools/builtin/port_scan.py |
-| 失败即停 | ConnectionRefused=继续，Timeout=**立即停止该目标** | tools/builtin/port_scan.py |
-| 403/401 答案 | HTTPError 作为有效指纹数据（WhatWeb 同款），非连接失败 | tools/builtin/webfetch.py |
-| 审计哈希链 | 每条操作 prev+SHA256 链式防篡改 | utils/logger.py |
-| 出站 scheme 白名单 | 全部 HTTP 出口统一走 webfetch.py（禁 file:///ftp://） | tools/builtin/webfetch.py |
+| 单线程限速 | `StealthRateLimiter`（Semaphore + 随机延迟） | agent/security/stealth.py |
+| 浏览器 UA | Chrome/Firefox/Safari 随机轮换，禁自定义扫描器 UA | agent/security/stealth.py |
+| 仅 TCP Connect | 禁 SYN/UDP/NULL/XMAS/FIN 等异常 packets | agent/tools/builtin/port_scan.py |
+| 失败即停 | ConnectionRefused=继续，Timeout=**立即停止该目标** | agent/tools/builtin/port_scan.py |
+| 403/401 答案 | HTTPError 作为有效指纹数据（WhatWeb 同款），非连接失败 | agent/tools/builtin/webfetch.py |
+| 审计哈希链 | 每条操作 prev+SHA256 链式防篡改 | agent/utils/logger.py |
+| 出站 scheme 白名单 | 全部 HTTP 出口统一走 webfetch.py（禁 file:///ftp://） | agent/tools/builtin/webfetch.py |
 
 ---
 
@@ -32,11 +32,11 @@
 | **Host Search（HackerTarget）** | GET `api.hackertarget.com/hostsearch/?q={domain}` → 解析 CSV 格式（host,ip） | HackerTarget | `asyncio.gather` 并行 |
 | **URL 扫描（urlscan）** | GET `urlscan.io/api/v1/search/?q=domain:{domain}&size=1000` → 解析 JSON results[].page.domain | urlscan.io | `asyncio.gather` 并行 |
 | **TLS 证书 SAN** | Python `ssl.create_default_context()` 单次握手 → `getpeercert().get("subjectAltName")` | 目标 443 端口（单次握手） | 串行 |
-| **DNS 字典验证** | 600 词内置字典（tools/data/subnames.txt）+ `socket.getaddrinfo(prefix.domain)` 并发验证（Semaphore(10)） | 系统解析器 | Semaphore(10) |
+| **DNS 字典验证** | 600 词内置字典（agent/tools/data/subnames.txt）+ `socket.getaddrinfo(prefix.domain)` 并发验证（Semaphore(10)） | 系统解析器 | Semaphore(10) |
 | **递归拓线** | 对发现的每个子域（≤10 个）再查一层 CT（`include_subdomains=true`） | crt.sh / certspotter | 同 CT |
 | **存活解析** | `socket.getaddrinfo(host)` 逐主机验证 → 过滤不可达 | 系统解析器 | 串行 |
 
-**代码**：tools/subdomain_enum.py · tools/builtin/passive_dns.py · collectors/asset_expander.py
+**代码**：agent/tools/subdomain_enum.py · agent/tools/builtin/passive_dns.py · agent/collectors/asset_expander.py
 
 ### DNS 全记录
 
@@ -44,7 +44,7 @@
 |---|---|---|
 | A / AAAA / MX / NS / TXT / SOA / CNAME | DoH JSON API：`dns.google/resolve?name=&type=` → `dns.alidns.com/resolve?name=&type=`（`asyncio.gather` 5 类型并行） | 全部超时 → `socket.gethostbyname_ex` 兜底 |
 
-**代码**：tools/builtin/dns_query.py
+**代码**：agent/tools/builtin/dns_query.py
 
 ### WHOIS 注册信息
 
@@ -54,7 +54,7 @@
 | 第二步 | 连接 referral server（如 `whois.cnnic.cn:43`）→ 获取注册人/日期/NS |
 | 特例 | `.edu.cn` 不在 CNNIC，归 CERNET（`whois.edu.cn`） |
 
-**代码**：collectors/asset_expander.py::_whois_query
+**代码**：agent/collectors/asset_expander.py::_whois_query
 
 ### IP / C 段
 
@@ -75,8 +75,8 @@
 | **Server 版本提取** | `nginx/1.24.0`、`Apache/2.4.x` 等格式正则 | 3 |
 | **降级链** | https 失败 → http 兜底一次；证书不匹配（IP 目标）→ CERT_NONE 重试一次 | — |
 
-**签名表**：tools/builtin/signatures.py（HEADER_SIGNATURES + BODY_SIGNATURES + VERSION_HEADER_SIGNATURES + SECURITY_HEADER_SIGNATURES + SCRIPT_LIB_NAMES）
-**代码**：tools/builtin/fingerprint.py
+**签名表**：agent/tools/builtin/signatures.py（HEADER_SIGNATURES + BODY_SIGNATURES + VERSION_HEADER_SIGNATURES + SECURITY_HEADER_SIGNATURES + SCRIPT_LIB_NAMES）
+**代码**：agent/tools/builtin/fingerprint.py
 
 ### 探活（httpx_probe）
 
@@ -85,7 +85,7 @@
 | httpx CLI | `httpx -u {url} -silent -status-code -title -tech-detect -no-color` |
 | 降级 | httpx 缺失 → builtin 指纹工具（单次 GET） |
 
-**代码**：tools/httpx_tool.py
+**代码**：agent/tools/httpx_tool.py
 
 ### 历史端点（Wayback）
 
@@ -93,7 +93,7 @@
 |---|---|
 | CDX API | GET `web.archive.org/cdx/search/cdx?url=*.{domain}/*&output=json&collapse=urlkey&filter=statuscode:200` → 提取路径 |
 
-**代码**：tools/wayback_urls.py
+**代码**：agent/tools/wayback_urls.py
 
 ### 子域接管候选
 
@@ -103,7 +103,7 @@
 | 悬空检测 | CNAME 指向第三方托管（GitHub Pages / S3 / Azure / Netlify / Vercel 等 11 家签名）+ 响应体"未部署"特征匹配 |
 | 判定 | CNAME → 第三方托管 + 特征页匹配 = **接管候选（High）** |
 
-**代码**：tools/takeover_check.py
+**代码**：agent/tools/takeover_check.py
 
 ---
 
@@ -121,7 +121,7 @@
 | **结果分类** | `open_ports`（成功连接）/ `closed`（refused）/ `stopped_early`（超时终止标记） |
 | **降级链** | nmap → builtin socket（nmap_scan 自动降级到 BuiltinPortScan，跨 Schema 参数转换） |
 
-**代码**：tools/nmap_tool.py（编排+降级）· tools/builtin/port_scan.py（socket 实现）
+**代码**：agent/tools/nmap_tool.py（编排+降级）· agent/tools/builtin/port_scan.py（socket 实现）
 
 ### 降级链
 
@@ -146,8 +146,8 @@ nmap CLI 可用？
 | **favicon** | `/favicon.ico` | SHA256(md5) → 跨主机同值 = 同源部署（聚类情报） | 情报 |
 | **js_inventory** | `/`（首页） | `<script src>` 正则提取库名+精确版本（jQuery 3.6.0 / Vue 3.4.21 等 8 种） | js库 |
 
-**引擎**：tools/deep_fingerprint.py（≤10 GET/台，`asyncio.gather` 限速分发）
-**插件**：tools/techniques/（base.py + 4 个插件 + @register 装饰器注册表）
+**引擎**：agent/tools/deep_fingerprint.py（≤10 GET/台，`asyncio.gather` 限速分发）
+**插件**：agent/tools/techniques/（base.py + 4 个插件 + @register 装饰器注册表）
 
 ### 敏感路径枚举 + 泄露嗅探
 
@@ -162,7 +162,7 @@ nmap CLI 可用？
 | **证据绑定** | 每条发现附响应体 SHA256 前 64 字节哈希 |
 | **失败即停** | 连接层失败（-1 哨兵）→ 立即停止该目标 |
 
-**代码**：tools/dir_enum.py · tools/builtin/leak_signatures.py
+**代码**：agent/tools/dir_enum.py · agent/tools/builtin/leak_signatures.py
 
 ### CMS 感知路径生成
 
@@ -201,16 +201,16 @@ nmap CLI 可用？
 
 | 手段 | 实现位置 | 效果 |
 |---|---|---|
-| **ContextTrimmer** | efficiency/context_trimmer.py → core/context.py | 超预算裁剪旧消息，保留 system 前缀（Prompt Cache 命中） |
-| **TemplateCompressor** | efficiency/template_compressor.py → core/context.py | nmap/httpx 固定格式输出 → 仅注入变量部分 |
-| **CallDeduplicator** | efficiency/deduplicator.py → core/agent.py | hash(目标+工具+参数) 命中缓存直接复用 |
-| **BudgetGuard** | efficiency/budget_guard.py → core/llm.py | 60% 停 L2 / 80% 只被动 / 100% 断 LLM + [INCOMPLETE] 水印 |
-| **IncrementalReporter** | efficiency/incremental.py | 同目标同工具结果无变化 → 标 unchanged 跳过 |
-| **大输出落盘** | core/context.py::_dump_raw | >1500 token 工具结果落盘，上下文只留指针 |
-| **DoH 解析器记忆** | tools/builtin/dns_query.py | 首次超时后发现可用源 → 后续直连（22s→2s） |
-| **并发 DNS 类型** | collectors/asset_expander.py | 5 类型 `asyncio.gather` 并行（55s→25s） |
-| **并发被动源** | tools/subdomain_enum.py | 4 源 `asyncio.gather` 并行（20s→10.6s） |
-| **并发指纹** | collectors/web_fingerprint.py | `Semaphore(3)` 跨主机并行（63s→21s） |
+| **ContextTrimmer** | agent/efficiency/context_trimmer.py → agent/core/context.py | 超预算裁剪旧消息，保留 system 前缀（Prompt Cache 命中） |
+| **TemplateCompressor** | agent/efficiency/template_compressor.py → agent/core/context.py | nmap/httpx 固定格式输出 → 仅注入变量部分 |
+| **CallDeduplicator** | agent/efficiency/deduplicator.py → agent/core/agent.py | hash(目标+工具+参数) 命中缓存直接复用 |
+| **BudgetGuard** | agent/efficiency/budget_guard.py → agent/core/llm.py | 60% 停 L2 / 80% 只被动 / 100% 断 LLM + [INCOMPLETE] 水印 |
+| **IncrementalReporter** | agent/efficiency/incremental.py | 同目标同工具结果无变化 → 标 unchanged 跳过 |
+| **大输出落盘** | agent/core/context.py::_dump_raw | >1500 token 工具结果落盘，上下文只留指针 |
+| **DoH 解析器记忆** | agent/tools/builtin/dns_query.py | 首次超时后发现可用源 → 后续直连（22s→2s） |
+| **并发 DNS 类型** | agent/collectors/asset_expander.py | 5 类型 `asyncio.gather` 并行（55s→25s） |
+| **并发被动源** | agent/tools/subdomain_enum.py | 4 源 `asyncio.gather` 并行（20s→10.6s） |
+| **并发指纹** | agent/collectors/web_fingerprint.py | `Semaphore(3)` 跨主机并行（63s→21s） |
 
 ---
 

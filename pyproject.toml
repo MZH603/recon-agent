@@ -21,16 +21,12 @@ dev = ["pytest>=8.0", "bandit>=1.7"]
 sandbox = ["bandit>=1.7"]
 
 [project.scripts]
-recon-agent = "cli.main:main"
-recon-agent-mcp = "server.mcp_server:main"
+recon-agent = "agent.cli.main:main"
+recon-agent-mcp = "agent.server.mcp_server:main"
 
 [tool.setuptools.packages.find]
 namespaces = false
-include = [
-    "cli*", "core*", "model*", "tools*", "collectors*", "knowledge*",
-    "scripts*", "output*", "platforms*", "security*", "gate*", "server*",
-    "efficiency*", "hallucination*", "observability*", "utils*",
-]
+include = ["agent*", "tui*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/smoke", "tests/e2e"]
@@ -41,6 +37,7 @@ markers = [
 ]
 
 [tool.setuptools.package-data]
-core = ["prompt_templates/*.md"]
-tools = ["data/*.txt", "data/*.yaml", "data/skills/*.md"]
-cli = ["tui/app.mjs", "tui/view.mjs", "tui/layout.mjs", "tui/commands.mjs", "tui/bridge.mjs", "tui/setup.mjs", "tui/setup-app.mjs", "tui/package.json", "tui/package-lock.json"]
+agent = ["system_prompt.txt"]
+"agent.core" = ["prompt_templates/*.md"]
+"agent.tools" = ["data/*.txt", "data/*.yaml", "data/skills/*.md"]
+tui = ["*.mjs", "package.json", "package-lock.json"]

@@ -26,7 +26,7 @@
 
 | 红线 | 规则 | 代码 |
 |---|---|---|
-| 政府/军事域名 | `.gov` `.mil` `.gov.cn` `.mil.cn` 后缀匹配绝对拒绝 | security/stealth.py::allowed_target |
+| 政府/军事域名 | `.gov` `.mil` `.gov.cn` `.mil.cn` 后缀匹配绝对拒绝 | agent/security/stealth.py::allowed_target |
 | 云元数据地址 | `169.254.0.0/16` 链路本地绝对拒绝 | 同上 |
 | RFC1918/内网 | `10.x` `172.16-31.x` `192.168.x` `127.x` 默认拒绝（`--lab` 可解锁自有环境） | 同上 |
 | localhost | 默认拒绝（`--lab` 可解锁） | 同上 |
@@ -37,20 +37,20 @@
 
 | 场景 | 要求 | 代码 |
 |---|---|---|
-| CLI 交互模式 | `--authorized` 或终端输入 `yes` | cli/main.py::_confirm_authorization |
-| CLI batch 模式 | 必须加 `--authorized`，否则拒绝执行 | cli/main.py |
-| MCP 模式 | `--authorized-for <域名>` 必填，否则拒绝启动 | server/mcp_server.py |
-| L1 端口扫描 | 上述基础上需一次确认（交互 `yes` / MCP `--allow-l1`） | gate/scan_gate.py::request_level_1 |
-| L2 深度探测 | 三次独立确认 + 签名文件 + 逐项确认 | gate/scan_gate.py |
+| CLI 交互模式 | `--authorized` 或终端输入 `yes` | agent/cli/main.py::_confirm_authorization |
+| CLI batch 模式 | 必须加 `--authorized`，否则拒绝执行 | agent/cli/main.py |
+| MCP 模式 | `--authorized-for <域名>` 必填，否则拒绝启动 | agent/server/mcp_server.py |
+| L1 端口扫描 | 上述基础上需一次确认（交互 `yes` / MCP `--allow-l1`） | agent/gate/scan_gate.py::request_level_1 |
+| L2 深度探测 | 三次独立确认 + 签名文件 + 逐项确认 | agent/gate/scan_gate.py |
 
 ### 1.3 范围锁定（代码层硬拦截，不依赖 Prompt）
 
 | 规则 | 实现 |
 |---|---|
-| 仅主域及其子域可扫 | security/stealth.py::is_in_scope（`candidate == main or candidate.endswith("." + main)`） |
-| 关联资产/C 段仅记录不扫描 | cli/pipeline.py + collectors/asset_expander.py |
+| 仅主域及其子域可扫 | agent/security/stealth.py::is_in_scope（`candidate == main or candidate.endswith("." + main)`） |
+| 关联资产/C 段仅记录不扫描 | agent/cli/pipeline.py + agent/collectors/asset_expander.py |
 | IP 目标仅精确匹配（同 C 段其他 IP ≠ 范围内） | 同上 |
-| 注册表五道守卫链统一执行 | tools/registry.py::execute（Schema→合规→范围→门控→隐蔽修正） |
+| 注册表五道守卫链统一执行 | agent/tools/registry.py::execute（Schema→合规→范围→门控→隐蔽修正） |
 
 ---
 
@@ -66,14 +66,14 @@
 
 | 机制 | 规则 | 代码 |
 |---|---|---|
-| 三次独立确认 | 步骤 1: `CONFIRM 2` · 步骤 2: 目标精确字符串 · 步骤 3: `I UNDERSTAND AND AUTHORIZE` | gate/scan_gate.py::request_level_2_step |
+| 三次独立确认 | 步骤 1: `CONFIRM 2` · 步骤 2: 目标精确字符串 · 步骤 3: `I UNDERSTAND AND AUTHORIZE` | agent/gate/scan_gate.py::request_level_2_step |
 | 通用词无效 | `y/yes/确认/是/ok` 一律拒绝 | 同上（GENERIC_YES 集合排除） |
-| 签名文件 | SHA256 + 时间戳 + 操作者指纹 → `auth/<target>.sig` | gate/scan_gate.py::unlock_level_2 |
+| 签名文件 | SHA256 + 时间戳 + 操作者指纹 → `auth/<target>.sig` | agent/gate/scan_gate.py::unlock_level_2 |
 | 会话有效 | 签名仅当次进程有效，跨会话需重新确认 | 构造时不读取旧签名 |
-| 逐项确认 | 每个具体动作执行前单独确认（不可批量 yes） | gate/scan_gate.py::confirm_step |
-| abort | 任意环节输入 `abort` 立即退回 L0 且不可撤销 | gate/scan_gate.py::abort |
+| 逐项确认 | 每个具体动作执行前单独确认（不可批量 yes） | agent/gate/scan_gate.py::confirm_step |
+| abort | 任意环节输入 `abort` 立即退回 L0 且不可撤销 | agent/gate/scan_gate.py::abort |
 | 非交互禁 L2 | `--batch` / MCP 模式 **永久禁止** L2；无 TTY 默认不代填确认 | 全路径检查 |
-| `--auto-confirm` | 必须显式启用，仅限授权测试目标的自动化级联（审计留痕） | CLI / scripts/aggressive_l2.py |
+| `--auto-confirm` | 必须显式启用，仅限授权测试目标的自动化级联（审计留痕） | CLI / agent/scripts/aggressive_l2.py |
 
 ### 2.3 级联语义
 
@@ -85,7 +85,7 @@
 
 ## 第 3 层 · 执行约束（你怎么做）
 
-### 3.1 隐蔽性强制（security/stealth.py）
+### 3.1 隐蔽性强制（agent/security/stealth.py）
 
 | 约束 | 实现 | 级别 |
 |---|---|---|
@@ -99,7 +99,7 @@
 | 并发上限 | 绝对 ≤2（默认 1），超限自动修正 | 全级别 |
 | L2 HTTP 重定向 | 深度指纹和敏感路径探测拒绝跨主机重定向 | L2 |
 
-### 3.2 沙箱三层（scripts/sandbox.py）
+### 3.2 沙箱三层（agent/scripts/sandbox.py）
 
 | 层 | 机制 | 失败后果 |
 |---|---|---|
@@ -117,7 +117,7 @@
 | 同一主机路径枚举 | **串行**（3-10s 随机延迟） | 同一目标必须模拟人类节奏 |
 | 同一主机端口扫描 | **串行**（3-10s 随机延迟） | 同上 |
 
-### 3.3 HTTP 出口统一安全检查点（tools/builtin/webfetch.py）
+### 3.3 HTTP 出口统一安全检查点（agent/tools/builtin/webfetch.py）
 
 全部工具的出站 HTTP 请求统一走 `http_get()`，消除 5 处重复逻辑。该模块强制执行：
 
@@ -130,7 +130,7 @@
 | 响应体截断 | ≤200KB（防内存炸裂），泄露嗅探可扩展至 100KB |
 | 错误收敛 | 连接失败 → `(0, {}, "")`，永不抛异常到调用方 |
 
-### 3.4 泄露嗅探（tools/builtin/leak_signatures.py）
+### 3.4 泄露嗅探（agent/tools/builtin/leak_signatures.py）
 
 内容级泄露分析（不止看状态码，分析响应体内容）：
 
@@ -176,7 +176,7 @@
 
 ## 第 4 层 · 数据可信（结论从哪来）
 
-### 4.1 证据绑定（hallucination/evidence.py）
+### 4.1 证据绑定（agent/hallucination/evidence.py）
 
 | 机制 | 规则 |
 |---|---|
@@ -185,17 +185,17 @@
 | confidence | 置信度 ≤0.7 的结论标注 `[未确认]` |
 | degraded | 降级模式自动下调一档 + 报告标注 |
 
-### 4.2 矛盾检测（hallucination/contradiction.py）
+### 4.2 矛盾检测（agent/hallucination/contradiction.py）
 
 - 同主体同属性多来源冲突 → `[冲突，需人工核实]`
 - **保留双方**，禁止模型二选一
 
-### 4.3 一致性校验（hallucination/consistency.py）
+### 4.3 一致性校验（agent/hallucination/consistency.py）
 
 - 报告生成前比对结论与证据登记簿
 - "报告有、证据无" → 标 `[无证据]`（CI 可配置阻断）
 
-### 4.4 否定证据（knowledge/cve_base.py）
+### 4.4 否定证据（agent/knowledge/cve_base.py）
 
 - CVE 查不到 → 硬输出 `"未收录"`，**禁止编造编号**
 - 快照 SHA256 签名校验，不匹配拒绝加载（防投毒）
@@ -214,7 +214,7 @@
 
 ## 第 5 层 · 审计追踪（你做了什么）
 
-### 5.1 审计哈希链（utils/logger.py）
+### 5.1 审计哈希链（agent/utils/logger.py）
 
 | 机制 | 规则 |
 |---|---|
@@ -240,7 +240,7 @@
 - autouse fixture 强制所有测试的审计走 tmp_path
 - **生产 audit.log 只由真实作业写入**（已在 QA 中实测验证）
 
-### 5.5 WhatWeb 插件架构安全（tools/techniques/）
+### 5.5 WhatWeb 插件架构安全（agent/tools/techniques/）
 
 - 插件仅声明 paths + analyze，引擎统一限速抓取分发
 - 新增插件零改动引擎代码——扩展安全性靠签名表审计而非代码审查

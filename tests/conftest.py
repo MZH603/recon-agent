@@ -49,7 +49,7 @@ def app_env(tmp_path):
 
 @pytest.fixture
 def run_app(app_env, tmp_path):
-    def run(*args, module="cli.main", input_text=""):
+    def run(*args, module="agent.cli.main", input_text=""):
         return subprocess.run(
             [sys.executable, "-m", module, *args],
             cwd=tmp_path / "work", env=app_env, input=input_text,

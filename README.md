@@ -13,8 +13,8 @@
 Python ≥ 3.10。核心依赖由 `pyproject.toml` 安装，包括 LiteLLM、LangGraph 和 SQLite checkpoint 支持。
 
 交互会话默认使用 TUI 主屏终端界面（`@earendil-works/pi-tui` 精确版本 1.0.4），需要 Node.js ≥22.19.0。
-在仓库根目录执行 `npm ci --ignore-scripts --prefix cli/tui`；wheel 安装后可用
-`python -c "from cli.tui_bridge import TUI_DIR; print(TUI_DIR)"` 找到该目录，再切换到该目录执行 `npm ci --ignore-scripts`。
+在仓库根目录执行 `npm ci --ignore-scripts --prefix tui`；wheel 安装后可用
+`python -c "from tui.bridge import TUI_DIR; print(TUI_DIR)"` 找到该目录，再切换到该目录执行 `npm ci --ignore-scripts`。
 依赖只安装在本机该目录，不自动联网安装。模型、LangGraph、门控和 SQLite 仍由 Python 后端负责；已有 Key 只留在 Python，配置页中新输入的 Key 仅短暂经认证本地桥传给 Python。
 
 ```powershell
@@ -179,31 +179,24 @@ TUI 输入区展示上下文和已知费用，`/status` 展示累计 token 与�
 目录按职责组织，运行代码与测试分开；详细调用关系见[项目架构](docs/architecture.md)：
 
 ```text
-cli/
-  main.py                 # CLI 启动入口
-  tui_bridge.py           # Python 与前端的本地通信
-  tui_session.py          # 会话页面适配
-  tui_setup.py            # 配置页面适配
-  tui/                    # JS 页面、布局及前端依赖清单
-core/
-  session_factory.py      # TUI 与 Rich 共用的会话初始化
-  prompts.py              # 主提示词加载与动态信息
-  prompt_templates/       # 默认会话主提示词
-  orchestration/          # Agent 主循环与持久化
-model/
-  lazy.py、service.py      # 延迟初始化、调用与预算登记
-tools/
-  base.py、registry.py     # 公共工具契约与注册执行入口
-  runtime/                # 等待、超时、结果、证据与产物
-  builtin/                # 自带工具及外部程序封装
-  adapters/               # 自定义工具、HTTP、外部 MCP 与配置
-  techniques/、data/       # 复用手段和静态资源
-tests/
-  smoke/                  # CLI 与真实 TUI 进程冒烟
-  e2e/                    # 会话/报告/恢复与 MCP 采集端到端
+agent/
+  cli/                  # 命令入口与确定性扫描入口
+  core/orchestration/   # Agent 会话编排和持久状态
+  model/                # 模型接入
+  tools/                # 工具注册、适配与内置资源
+  gate/、security/      # 授权与范围检查
+  server/               # MCP 服务
+  ...                   # 采集、知识、报告与公共设施
+tui/
+  *.mjs                 # 终端页面、布局与交互
+  bridge.py             # 与 Python 后端的本地通信
+  session.py、setup.py  # TUI 会话与配置适配
+third_party/tools/      # 上游第三方扫描器与字典，不进入 wheel
+tests/                  # 冒烟、端到端和历史回归测试
+docs/                   # 正式项目文档
 ```
 
-`cli/tui/` 只包含运行代码及依赖，测试不进入 wheel。
+`tui/` 的前端资源随 Python wheel 发布，Node 依赖仍需单独安装；测试不进入 wheel。
 底层终端库仍为 `@earendil-works/pi-tui`，项目自己的目录和入口统一采用 `tui` 命名。
 
 ```text
@@ -218,7 +211,7 @@ MCP → existing external-agent tool bridge (L2 prohibited)
 
 模型提出工具与计划；代码决定是否允许执行。原始工具输出是非可信数据；发现需要真实来源支持，普通问答可直接以 XML 标记完成。模型失败、Schema 重试耗尽、预算硬上限及矛盾都可暂停。执行已开始但没有明确完成日志时，恢复必须显式选择 retry/skip；L2 重试也重新逐项确认。
 
-本阶段替换交互会话编排、持久化、报告适配与终端界面，保留默认/级联/MCP 路径。Skill、RAG、工具组合与 MCP 标准升级属于后续阶段。旧 `core/agent.py` 保留用于兼容，不再是 `--session` 主循环。
+本阶段替换交互会话编排、持久化、报告适配与终端界面，保留默认/级联/MCP 路径。Skill、RAG、工具组合与 MCP 标准升级属于后续阶段。旧 `agent/core/agent.py` 保留用于兼容，不再是 `--session` 主循环。
 
 ## 离线验证
 
@@ -226,7 +219,7 @@ MCP → existing external-agent tool bridge (L2 prohibited)
 
 ```powershell
 & './.venv/Scripts/python.exe' -m pytest -q
-npm --prefix cli/tui test
+npm --prefix tui test
 ```
 
-只维护冒烟与端到端测试，全部通过真实程序入口运行，使用临时配置和本地服务，无需模型 Key 或公网目标。pytest 完整命令包含 TUI 冒烟，需要先安装 Node.js 和 TUI 依赖；npm 命令仅运行 TUI 冒烟。目录约定、筛选命令和覆盖范围见 [测试约定](docs/testing.md)。
+默认测试集为冒烟与端到端测试，通过真实程序入口运行，使用临时配置和本地服务，无需模型 Key 或公网目标。上游历史回归测试位于 `tests/unit/`，可显式执行 `python -m pytest -q tests/unit`。pytest 完整命令包含 TUI 冒烟，需要先安装 Node.js 和 TUI 依赖；npm 命令仅运行 TUI 冒烟。目录约定、筛选命令和覆盖范围见 [测试约定](docs/testing.md)。

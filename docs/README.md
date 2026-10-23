@@ -11,4 +11,3 @@
 - [安全策略](security-policy.md)
 - [扫描能力实现](scan-capabilities.md)
 - [知识骨架](knowledge-map.md)
-- [仓库结构迁移记录](repository-structure.md)

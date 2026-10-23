@@ -79,7 +79,7 @@ python -m venv .venv
 **第 3 步**：自检（确认环境 OK）：
 
 ```bat
-.venv\Scripts\python -m cli.main --doctor
+.venv\Scripts\python -m agent.cli.main --doctor
 ```
 
 ✅ 成功标志：出现一张「环境自检」表格，Python 一行是 ✅。
@@ -87,7 +87,7 @@ python -m venv .venv
 **第 4 步**：第一次扫描（对授权练习机做 L0 被动采集）：
 
 ```bat
-.venv\Scripts\python -m cli.main -t scanme.nmap.org --authorized --batch
+.venv\Scripts\python -m agent.cli.main -t scanme.nmap.org --authorized --batch
 ```
 
 ✅ 成功标志：屏幕滚动输出 `[+] 子域...`、`[+] 指纹...`，最后出现
@@ -129,12 +129,12 @@ Linux 用户把 `.venv\Scripts\` 换成 `.venv/bin/` 即可。
 依次执行以下三条命令，全部无报错即安装成功：
 
 ```bat
-.venv\Scripts\python -m cli.main --version
+.venv\Scripts\python -m agent.cli.main --version
 ```
 预期输出：`recon-agent V1.0 (0.1.0 → 1.0.0)`
 
 ```bat
-.venv\Scripts\python -m cli.main --doctor
+.venv\Scripts\python -m agent.cli.main --doctor
 ```
 预期输出：一张「环境自检」表格（各项含义见第 8 章）。
 
@@ -148,7 +148,7 @@ Linux 用户把 `.venv\Scripts\` 换成 `.venv/bin/` 即可。
 | 方式 | 命令样式 | 说明 |
 |---|---|---|
 | 短命令 | `.venv\Scripts\recon-agent -t 目标 --authorized --batch` | 安装后才有 |
-| 模块方式 | `.venv\Scripts\python -m cli.main -t 目标 --authorized --batch` | 永远可用 |
+| 模块方式 | `.venv\Scripts\python -m agent.cli.main -t 目标 --authorized --batch` | 永远可用 |
 
 本手册后续统一用**短命令**形式。
 
@@ -240,7 +240,7 @@ L0 一轮约 8-10 分钟，产出：77 个子域名、76 个存活、65 台端�
 L1 端口扫描通过专用编排脚本执行（自带全程功能自检）：
 
 ```bat
-.venv\Scripts\python -m scripts.l1_scan --target example.com --authorized
+.venv\Scripts\python -m agent.scripts.l1_scan --target example.com --authorized
 ```
 
 可选参数：`--note "授权说明"`——把授权背景写进审计日志（强烈建议填写）。
@@ -281,7 +281,7 @@ recon-agent -t 目标 --authorized --level 1 --auto-confirm --note "授权说明
 ### 5.5 想扫描全部存活子域的端口？
 
 ```bat
-.venv\Scripts\python -m scripts.fill_l1_scan
+.venv\Scripts\python -m agent.scripts.fill_l1_scan
 ```
 
 （这是"填表模式"：自动跳过已扫过的主机、每 5 台落盘一次进度、中断后重跑自动续扫。76 台全量约 40-50 分钟。）
@@ -313,7 +313,7 @@ recon-agent -t example.com --authorized --level 2 --auto-confirm --note "授权�
 ### 6.3 只跑 L2 深度阶段（跳过 L0/L1）
 
 ```bat
-.venv\Scripts\python -m scripts.fleet_l2 --target example.com --authorized --auto-confirm --note "课程项目测试，指导教师同意"
+.venv\Scripts\python -m agent.scripts.fleet_l2 --target example.com --authorized --auto-confirm --note "课程项目测试，指导教师同意"
 ```
 
 | 参数 | 含义 |
@@ -333,8 +333,8 @@ recon-agent -t example.com --authorized --level 2 --auto-confirm --note "授权�
 ### 6.5 定向扫描（只扫个别重点子域）
 
 ```bat
-.venv\Scripts\python -m scripts.aggressive_l2 --target example.com --authorized --auto-confirm
-.venv\Scripts\python -m scripts.demo_l2 --target scanme.nmap.org --authorized
+.venv\Scripts\python -m agent.scripts.aggressive_l2 --target example.com --authorized --auto-confirm
+.venv\Scripts\python -m agent.scripts.demo_l2 --target scanme.nmap.org --authorized
 ```
 
 ### 6.6 L2 实测能发现什么（example.com 真实案例）
@@ -449,8 +449,8 @@ recon-agent -t example.com --authorized --batch --diff reports\recon_hubu_edu_cn
 标准安装已包含 LiteLLM、LangGraph 和 SQLite checkpoint 依赖；无需额外安装模型层。
 
 正常交互终端默认使用 TUI 界面，需要 Node.js ≥22.19.0 和本地固定版本 `@earendil-works/pi-tui` 1.0.4。
-在项目目录执行 `npm ci --ignore-scripts --prefix cli/tui`。wheel 安装后先执行
-`python -c "from cli.tui_bridge import TUI_DIR; print(TUI_DIR)"` 找到界面目录，在该目录执行 `npm ci --ignore-scripts`。
+在项目目录执行 `npm ci --ignore-scripts --prefix tui`。wheel 安装后先执行
+`python -c "from tui.bridge import TUI_DIR; print(TUI_DIR)"` 找到界面目录，在该目录执行 `npm ci --ignore-scripts`。
 `--ui rich` 选择 Rich 兼容界面；`--ui tui` 要求 TUI 依赖可用，否则明确退出；默认 `--ui auto` 依赖缺失时提示并回退。旧参数 `--ui pi` 保留为兼容别名。
 Python 后端继续负责模型、LangGraph、SQLite、范围、预算与门控；界面不继承模型 API Key。
 
@@ -569,7 +569,7 @@ recon-agent -t 192.168.1.50 --authorized --lab --profile stealth
 ## 13. CVE 知识库维护
 
 ```bat
-.venv\Scripts\python -m knowledge.snapshot
+.venv\Scripts\python -m agent.knowledge.snapshot
 ```
 
 联网从 OSV 拉取常见产品的漏洞数据，写入 `%APPDATA%\recon-agent\cve_snapshot\` 并附 SHA256 签名（防篡改）。
@@ -596,21 +596,21 @@ recon-agent -t 目标 --authorized --batch -o D:\out     :: 指定输出目录�
 :: 具体工具调用示例：
 :: dns_query: recon-agent -t example.com --authorized --batch :: 查询 DNS 记录
 :: fingerprint: recon-agent -t http://example.com/ --authorized :: 识别技术栈
-:: port_scan: .venv\Scripts\python -m scripts.l1_scan --target example.com --authorized :: 端口扫描
-:: dir_enum: .venv\Scripts\python -m scripts.fleet_l2 --target example.com --authorized :: 路径枚举
+:: port_scan: .venv\Scripts\python -m agent.scripts.l1_scan --target example.com --authorized :: 端口扫描
+:: dir_enum: .venv\Scripts\python -m agent.scripts.fleet_l2 --target example.com --authorized :: 路径枚举
 
 :: ── 级联（高级别自动包含低等级，推荐）──
 recon-agent -t 目标 --authorized --level 2 --auto-confirm --note "授权说明"
 recon-agent -t 目标 --authorized --level 1 --auto-confirm
 
 :: ── L1（端口，一次确认）──
-.venv\Scripts\python -m scripts.l1_scan --target 目标 --authorized
-.venv\Scripts\python -m scripts.fill_l1_scan             :: 全量端口面填补（可续跑）
+.venv\Scripts\python -m agent.scripts.l1_scan --target 目标 --authorized
+.venv\Scripts\python -m agent.scripts.fill_l1_scan             :: 全量端口面填补（可续跑）
 
 :: ── L2（深度，三次确认）──
-.venv\Scripts\python -m scripts.fleet_l2 --target 目标 --authorized --auto-confirm
-.venv\Scripts\python -m scripts.aggressive_l2 --target 目标 --authorized
-.venv\Scripts\python -m scripts.demo_l2 --target 目标 --authorized
+.venv\Scripts\python -m agent.scripts.fleet_l2 --target 目标 --authorized --auto-confirm
+.venv\Scripts\python -m agent.scripts.aggressive_l2 --target 目标 --authorized
+.venv\Scripts\python -m agent.scripts.demo_l2 --target 目标 --authorized
 
 :: ── 会话（LLM）──
 recon-agent -t 目标 --authorized --session --model deepseek-chat
@@ -622,7 +622,7 @@ recon-agent-mcp --authorized-for 域名 --allow-l1
 recon-agent -t 192.168.1.50 --authorized --lab --batch
 
 :: ── CVE 快照 ──
-.venv\Scripts\python -m knowledge.snapshot
+.venv\Scripts\python -m agent.knowledge.snapshot
 ```
 
 ---

@@ -25,9 +25,9 @@ nmap、httpx、API 静态采集和浏览器 MCP 复用现有实现，不引入�
 在仓库根目录执行：
 
 ```powershell
-Copy-Item tools/data/tool-integrations.example.yaml tools.local.yaml
-python -m cli.main --tools-config tools.local.yaml --list-tools
-python -m cli.main --session -t example.com --authorized --tools-config tools.local.yaml
+Copy-Item agent/tools/data/tool-integrations.example.yaml tools.local.yaml
+python -m agent.cli.main --tools-config tools.local.yaml --list-tools
+python -m agent.cli.main --session -t example.com --authorized --tools-config tools.local.yaml
 ```
 
 编辑 `tools.local.yaml`，填入本机真实程序路径，启用需要的条目。裸启动/`--auth` 的扩展工具列表也支持勾选这些条目。选择只影响本次会话，不安装工具或执行请求。

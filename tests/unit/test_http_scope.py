@@ -4,7 +4,7 @@ import urllib.request
 
 import pytest
 
-from security.http_scope import _SameHostRedirectHandler
+from agent.security.http_scope import _SameHostRedirectHandler
 
 
 def test_same_host_redirect_is_allowed():

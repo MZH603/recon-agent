@@ -18,11 +18,11 @@
 
 ```text
 python -m pip install -e ".[dev]"
-npm ci --ignore-scripts --prefix cli/tui
+npm ci --ignore-scripts --prefix tui
 python -m pytest -q              # 全部冒烟 + E2E（含 TUI）
 python -m pytest -m smoke -q     # 仅冒烟
 python -m pytest -m e2e -q       # 仅 E2E
-npm --prefix cli/tui test        # 仅 TUI 进程冒烟
+npm --prefix tui test        # 仅 TUI 进程冒烟
 ```
 
 已有仓库虚拟环境时，Windows 可将 `python` 替换为 `& './.venv/Scripts/python.exe'`。pytest 使用严格 marker 配置，默认只发现 `tests/smoke/` 和 `tests/e2e/`。

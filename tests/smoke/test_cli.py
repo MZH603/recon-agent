@@ -28,7 +28,7 @@ def test_cli_rejects_invalid_startup(run_app, args, expected):
 
 
 def test_mcp_requires_scope(run_app):
-    result = run_app(module="server.mcp_server")
+    result = run_app(module="agent.server.mcp_server")
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
     assert "--authorized-for" in result.stderr

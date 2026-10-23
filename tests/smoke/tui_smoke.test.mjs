@@ -39,7 +39,7 @@ for (const [entry, event, marker] of [
         client.write(JSON.stringify(event) + '\n');
       });
     });
-    const child = spawn(process.execPath, [fileURLToPath(new URL(`../../cli/tui/${entry}`, import.meta.url))],
+    const child = spawn(process.execPath, [fileURLToPath(new URL(`../../tui/${entry}`, import.meta.url))],
       {env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true});
     t.after(() => {
       if (!shutdown) t.diagnostic(`hello=${JSON.stringify(hello)} stdout=${JSON.stringify(stdout)} stderr=${stderr}`);
@@ -89,7 +89,7 @@ async function sessionFixture(t, extraEnv={}) {
       }
     });
   });
-  const child=spawn(process.execPath,[fileURLToPath(new URL('../../cli/tui/app.mjs',import.meta.url))],
+  const child=spawn(process.execPath,[fileURLToPath(new URL('../../tui/app.mjs',import.meta.url))],
     {env,stdio:['pipe','pipe','pipe'],windowsHide:true});
   child.stdout.on('data',bytes=>{stdout+=bytes.toString('utf8');});
   child.stderr.on('data',bytes=>{stderr+=bytes.toString('utf8');});
