@@ -37,10 +37,10 @@
 已安装工具后，在交互 PowerShell 中可以直接裸启动配置页：
 
 ```powershell
-Set-Location '.\recon-agent V1.0'
-& '..\.venv\Scripts\recon-agent.exe'
+# 在仓库根目录执行
+& '.\.venv\Scripts\recon-agent.exe'
 # 显式重新配置，或选 Rich 兼容输入（Key 隐藏）
-& '..\.venv\Scripts\recon-agent.exe' --auth --ui rich
+& '.\.venv\Scripts\recon-agent.exe' --auth --ui rich
 ```
 
 填写 API 根地址（例如 `https://api.openai.com/v1`，不要完整 `/chat/completions`）、模型、
@@ -450,11 +450,11 @@ Python 后端继续负责模型、LangGraph、SQLite、范围、预算与门控�
 可以只用环境变量指定模型、API 请求根地址和 Key，无需修改 YAML。在仓库根目录打开 PowerShell：
 
 ```powershell
-Set-Location '.\recon-agent V1.0'
+# 在仓库根目录执行
 $env:RECON_MODEL="openai/your-model"
 $env:RECON_API_BASE="https://your-endpoint.example/v1"
 $env:RECON_API_KEY="你的 Key"
-& '..\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized
+& '.\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized
 ```
 
 上例使用仓库根目录已有的 `.venv`。模型选择优先级为 `--model` > 非空 `RECON_MODEL` > YAML `name`。
@@ -666,4 +666,4 @@ recon-agent -t 192.168.1.50 --authorized --lab --batch
 
 ---
 
-*recon-agent V1.0 · 遇到本手册未覆盖的问题：先跑 `--doctor`，再查 `docs\知识骨架.md` 第 10 层调试案例库。*
+*recon-agent V1.0 · 遇到本手册未覆盖的问题：先跑 `--doctor`，再查 `docs\knowledge-map.md` 第 10 层调试案例库。*

@@ -32,5 +32,9 @@ htmlcov/
 .env
 .env.*
 !.env.example
-# Local reference repositories, planning notes, and verification records.
-/docs/
+# Local reference repositories and preserved pre-migration artifacts.
+/.local/
+
+# Generated reports and optional local tool environments.
+reports/
+.ofa_env/

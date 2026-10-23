@@ -14,7 +14,7 @@
 
 ## 运行
 
-从 `recon-agent V1.0/` 执行，先安装 Python 开发依赖、Node.js ≥22.19.0 和 TUI 依赖：
+从仓库根目录执行，先安装 Python 开发依赖、Node.js ≥22.19.0 和 TUI 依赖：
 
 ```text
 python -m pip install -e ".[dev]"
@@ -25,6 +25,6 @@ python -m pytest -m e2e -q       # 仅 E2E
 npm --prefix cli/tui test        # 仅 TUI 进程冒烟
 ```
 
-已有仓库虚拟环境时，Windows 可将 `python` 替换为 `& '../.venv/Scripts/python.exe'`。pytest 使用严格 marker 配置，默认只发现 `tests/smoke/` 和 `tests/e2e/`。
+已有仓库虚拟环境时，Windows 可将 `python` 替换为 `& './.venv/Scripts/python.exe'`。pytest 使用严格 marker 配置，默认只发现 `tests/smoke/` 和 `tests/e2e/`。
 
 仓库根目录 `.github/workflows/ci.yml` 在 Windows/Linux 上执行相同完整命令。缺少 Node 或 TUI 依赖时测试明确失败，不通过 skip 隐藏安装问题。已覆盖的终端按键与桥接操作使用本地 fixture；完整 Python↔TUI 交互、实际终端颜色通知差异和真实模型/公网扫描仍需按实际配置手动冒烟，结果单独记录。

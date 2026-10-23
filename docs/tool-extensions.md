@@ -22,7 +22,7 @@ nmap、httpx、API 静态采集和浏览器 MCP 复用现有实现，不引入�
 
 ## 启用与依赖
 
-在 `recon-agent V1.0` 目录执行：
+在仓库根目录执行：
 
 ```powershell
 Copy-Item tools/data/tool-integrations.example.yaml tools.local.yaml

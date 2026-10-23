@@ -1,6 +1,6 @@
 # 当前项目架构
 
-实际 Python 项目位于仓库的 `recon-agent V1.0/`，安装与打包入口为 `pyproject.toml`。
+实际 Python 项目位于仓库的 ``，安装与打包入口为 `pyproject.toml`。
 这份文档描述当前维护路径；旧路径的兼容入口不作为新增代码的位置。
 
 ## 目录与职责
@@ -105,7 +105,7 @@ Agent 主循环为 `decide → validate → authorize → execute → evaluate`�
 在项目目录使用仓库已有虚拟环境：
 
 ```powershell
-& '../.venv/Scripts/python.exe' -m pytest -q
+& './.venv/Scripts/python.exe' -m pytest -q
 npm --prefix cli/tui test
 ```
 

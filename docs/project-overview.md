@@ -2,7 +2,7 @@
 
 > 网络安全渗透测试 · 信息搜集 AI Agent
 > 版本：V1.0
-> 关联文档：[使用说明书](使用说明书.md)、[当前架构](architecture.md)
+> 关联文档：[使用说明书](user-guide.md)、[当前架构](architecture.md)
 
 ---
 
