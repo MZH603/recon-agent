@@ -61,7 +61,7 @@ extension_tools:
 
 扫描器不接受任意 flags、字典路径或命令。实际工具参数固定为单并发、受控间隔和有限数量；主动探测仍需 L2 解锁和逐项确认。Subfinder 固定使用 hackertarget 的 HTTP 被动来源，设置全局及来源限速，并遵守 L0 调用间隔；不会启用默认的多来源并行枚举，结果不能证明完整覆盖。配置的二进制是可信连接器，CLI 参数限制不能代替操作系统或网络沙箱；范围过滤也不等于控制程序所有内部网络行为。
 
-Nuclei 模板只接受一个 HTTP GET/HEAD、一个以 `{{BaseURL}}/` 或 `{{RootURL}}/` 开头的固定路径和简单 matcher。拒绝 raw、payload/fuzz、DSL、代码、DNS/network、headless、flow、外部动态地址等；禁重定向、interactsh 和自动更新。示例 `tools/data/nuclei-readonly-status.yaml` 仅观察 HTTP 状态，绝不能把命中解释为漏洞。
+Nuclei 模板只接受一个 HTTP GET/HEAD、一个以 `{{BaseURL}}/` 或 `{{RootURL}}/` 开头的固定路径和简单 matcher。拒绝 raw、payload/fuzz、DSL、代码、DNS/network、headless、flow、外部动态地址等；禁重定向、interactsh 和自动更新。HTTP 状态匹配只能作为观察结果，不能直接解释为漏洞。
 
 浏览器沿用 `browser` MCP 的导航、快照和请求白名单。读取 `browser_network_requests` 后，把本地 `evidence_id` 传给 `api_recon.runtime_evidence_ids`。Caido `list_requests` 的证据 ID 同样可导入。Caido `list_sitemap` 从有限请求页推导，`complete=false`，需要用 `after` 分页继续查询；它不是全量站点地图。
 
@@ -77,4 +77,4 @@ Nuclei 模板只接受一个 HTTP GET/HEAD、一个以 `{{BaseURL}}/` 或 `{{Roo
 
 ## 来源
 
-工具与资料的参考来源、版本和许可证见 [归属说明](../tools/data/skills/NOTICE.md)。本项目使用原生适配和重新编写的 Recon 资料，不引入上游 Agent 运行时。
+本项目使用原生适配和重新编写的 Recon 资料，不引入上游 Agent 运行时。

@@ -43,6 +43,6 @@ GitHub Actions 原本已位于根目录；本次移除其指向旧版本目录�
 
 原 `tests/unit/test_full_scan.py` 的删除/修改冲突按保留上游回归用例解决，连同另外三个新增测试置于 `tests/unit/`。默认测试入口不变，可显式运行这些历史用例。
 
-`tools/data/nuclei-readonly-status.yaml` 与 `tools/data/skills/NOTICE.md` 仍被现有文档引用，保留示例和来源说明。第三方文件保留上游格式；项目自有代码通过差异空白检查。
+上游已删除的 Nuclei 示例模板及归属说明文件同步删除，文档引用一并更新。文件迁移不恢复上游删除的内容。第三方文件保留上游格式；项目自有代码通过差异空白检查。
 
 合并后验证：`python -m pytest -q tests/smoke tests/e2e tests/unit` 全部 33 项通过；wheel 构建通过且未包含第三方工具目录，文档本地链接无断链。首次 TUI 测试超时，单独重跑及随后完整重跑均通过。
