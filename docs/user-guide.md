@@ -1,0 +1,685 @@
+# recon-agent V1.0 使用说明书（零基础对照版）
+
+> 适用对象：第一次接触本工具的使用者。本手册假设你**什么都不懂**，每一步都给出
+> 「输入什么命令 → 你会看到什么 → 怎么判断成功 → 出错了怎么办」。
+> 适用平台：Windows 10/11（主），Linux（命令差异单独标注）。
+>
+> ⚠️ **法律与合规（必读）**：本工具仅用于**已获书面授权**的安全测试。默认 L0 模式
+> 是受控采集级别，HTTP 指纹和 SAN 查询也可能接触远端；所有级别都必须先获得目标方授权。
+> 扫描你自己搭建的靶场、或 scanme.nmap.org（Nmap 官方授权测试机）永远是安全的练习方式。
+
+---
+
+## 目录
+
+1. [10 分钟极速上手](#1-10-分钟极速上手)
+2. [安装（一步步来）](#2-安装一步步来)
+3. [认识三级扫描模式](#3-认识三级扫描模式)
+4. [L0 被动测绘（最常用）](#4-l0-被动测绘最常用)
+5. [L1 隐蔽端口扫描](#5-l1-隐蔽端口扫描)
+6. [L2 深度指纹与路径枚举](#6-l2-深度指纹与路径枚举)
+7. [看懂报告（逐节讲解）](#7-看懂报告逐节讲解)
+8. [环境自检 --doctor](#8-环境自检---doctor)
+9. [报告增量对比 --diff](#9-报告增量对比---diff)
+10. [接入 AI Agent（MCP）](#10-接入-ai-agentmcp)
+11. [LLM 会话模式](#11-llm-会话模式)
+12. [扫描自己的内网靶场 --lab](#12-扫描自己的内网靶场---lab)
+13. [CVE 知识库维护](#13-cve-知识库维护)
+14. [命令速查总表](#14-命令速查总表)
+15. [故障排查（对照表）](#15-故障排查对照表)
+16. [术语表](#16-术语表)
+17. [文件位置速查](#17-文件位置速查)
+
+---
+
+## 1. 10 分钟极速上手
+
+已安装工具后，在交互 PowerShell 中可以直接裸启动配置页：
+
+```powershell
+# 在仓库根目录执行
+& '.\.venv\Scripts\recon-agent.exe'
+# 显式重新配置，或选 Rich 兼容输入（Key 隐藏）
+& '.\.venv\Scripts\recon-agent.exe' --auth --ui rich
+```
+
+填写 API 根地址（例如 `https://api.openai.com/v1`，不要完整 `/chat/completions`）、模型、
+API Key、已获授权的目标。Tab/Shift+Tab 切换，Enter 到下一字段；Space/Enter 勾选授权，
+在“进入会话”按 Enter。Esc 正常退出，Ctrl+C 取消。提交后显示 L0、等待任务，
+不会自动测试模型连接或扫描；原有 L1/L2 的确认仍需在会话内逐级完成。
+
+Key 仅用于本次进程，不保存到文件或会话 checkpoint；配置页输入始终遮罩。
+已有 `RECON_API_KEY` 或 YAML/引用环境变量中的主 Key 仅留在 Python；表单留空可沿用，
+填写新 Key 则覆盖本次主连接。`RECON_MODEL/RECON_API_BASE` 可预填；显式 `--model/-t` 优先，
+之后采用非空环境变量、上次非敏感字段、YAML 默认值。裸模型名会自动补上 `openai/`。
+用户配置目录的 `launcher.json` 只保存 API 地址、模型和目标，每次重新确认授权。
+第一次目标为空，`example.com` 仅为填写示例。内网靶场请显式加 `--auth --lab`。
+
+Pi 需要前述本机依赖；`--ui auto` 缺失时回退 Rich，`--ui tui` 会报依赖错误。
+非交互终端和 `--batch` 不开启配置页，也不从管道读取 Key。已有带目标/会话/MCP 参数的命令
+继续按原行为运行，只有显式 `--auth` 才要求配置；`--auth` 与 `--mcp` 不兼容。
+
+> 目标：装好工具，对 `scanme.nmap.org`（Nmap 官方允许扫描的练习机）完成第一次 L0 采集。
+
+**第 1 步**：打开命令行（Win+R 输入 `cmd` 回车），进入项目目录：
+
+```bat
+cd C:\Users\你的用户名\.zcode\workspace\default\recon-agent
+```
+
+**第 2 步**：创建并初始化虚拟环境（只需做一次）：
+
+```bat
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+```
+
+✅ 成功标志：最后显示 `Successfully installed ...`，没有红色 ERROR。
+
+**第 3 步**：自检（确认环境 OK）：
+
+```bat
+.venv\Scripts\python -m cli.main --doctor
+```
+
+✅ 成功标志：出现一张「环境自检」表格，Python 一行是 ✅。
+
+**第 4 步**：第一次扫描（对授权练习机做 L0 被动采集）：
+
+```bat
+.venv\Scripts\python -m cli.main -t scanme.nmap.org --authorized --batch
+```
+
+✅ 成功标志：屏幕滚动输出 `[+] 子域...`、`[+] 指纹...`，最后出现
+`[+] 报告: ...\reports\recon_scanme_nmap_org_日期_时间.md`。
+
+**第 5 步**：用记事本打开 `reports\` 目录下刚生成的 `.md` 文件——这就是你的第一份侦察报告。
+
+> 以上任何一步报错 → 直接跳到[第 15 章故障排查](#15-故障排查对照表)对照解决。
+
+---
+
+## 2. 安装（一步步来）
+
+### 2.1 你需要先有
+
+| 依赖 | 检查方法 | 没有怎么办 |
+|---|---|---|
+| Python ≥ 3.10 | 命令行输入 `python --version` 显示 `Python 3.1x` | 到 python.org 下载安装，**勾选 Add to PATH** |
+| 网络连接 | 能打开网页 | 部分 pip 下载慢/失败见第 15 章 |
+
+可选增强（没有也能用，工具会自动降级）：nmap、httpx、bandit、Docker。
+
+### 2.2 标准安装（Windows，在项目根目录执行）
+
+```bat
+:: ① 创建虚拟环境（一次性）
+python -m venv .venv
+
+:: ② 安装主程序与开发依赖（含 bandit 沙箱、pytest）
+.venv\Scripts\pip install -e ".[dev]"
+
+:: ③ 标准安装已包含 LiteLLM、LangGraph 与 SQLite checkpoint 依赖
+```
+
+Linux 用户把 `.venv\Scripts\` 换成 `.venv/bin/` 即可。
+
+### 2.3 验证安装成功
+
+依次执行以下三条命令，全部无报错即安装成功：
+
+```bat
+.venv\Scripts\python -m cli.main --version
+```
+预期输出：`recon-agent V1.0 (0.1.0 → 1.0.0)`
+
+```bat
+.venv\Scripts\python -m cli.main --doctor
+```
+预期输出：一张「环境自检」表格（各项含义见第 8 章）。
+
+```bat
+.venv\Scripts\python -m pytest -q
+```
+预期输出：全部冒烟与端到端测试通过；需要先安装 Node.js 和 TUI 依赖。测试类型、范围与筛选命令见 [测试约定](testing.md)，用例数量以实际收集结果为准。
+
+### 2.4 两种运行方式（等价）
+
+| 方式 | 命令样式 | 说明 |
+|---|---|---|
+| 短命令 | `.venv\Scripts\recon-agent -t 目标 --authorized --batch` | 安装后才有 |
+| 模块方式 | `.venv\Scripts\python -m cli.main -t 目标 --authorized --batch` | 永远可用 |
+
+本手册后续统一用**短命令**形式。
+
+---
+
+## 3. 认识三级扫描模式
+
+本工具的一切功能都归属三个级别，**从上往下逐级使用**：
+
+| 级别 | 名称 | 一句话 | 对目标的影响 | 确认方式 |
+|---|---|---|---|---|
+| **L0** | 被动测绘 | 只查公开数据，像正常人浏览网页 | 几乎为零（≤3 次网页访问/站） | 无需确认 |
+| **L1** | 隐蔽端口扫描 | 慢速敲门，看每台机器开哪些端口 | 限速 TCP 连接（每次间隔 3-10 秒） | 一次确认 |
+| **L2** | 深度探测 | 逐台识别用什么中间件/CMS，查敏感路径 | ≤10 次只读 GET/台 + 有界路径枚举 | 三次独立确认 + 签名 + 每步确认 |
+
+**决策口诀**（含新策略）：
+
+- 第一步：确认目标合法授权，优先使用对应内置工具
+  - 有 `dns_query` 能力 → 用 `dns_query` 查询 DNS 记录
+  - 有 `fingerprint` 能力 → 用 `fingerprint` 识别技术栈
+  - 有 `port_scan` 能力 → 用 `port_scan` 探测端口
+  - 有 `dir_enum` 能力 → 用 `dir_enum` 枚举敏感路径
+  - 无对应工具 → 按"脚本 fallback"编写一次性脚本
+
+- 第一次接触目标 → 只用 L0 工具（dns_query/fingerprint）；
+- L0 发现了存活资产、想知道"开了哪些门" → 升 L1（用 `port_scan`）；
+- L1 圈出了重点资产、想知道"跑的什么系统、有没有没锁的门" → 升 L2（用 `dir_enum`）。
+
+**永不变化的安全承诺**：单线程、每次请求间隔 3-10 秒随机、只做 TCP Connect、失败立即停止不重试、浏览器 UA 伪装、全程审计留痕。L2 "激进"指的是探测手段更丰富，**不是**放开限速。
+
+**级联执行（V1.0）**：请求高级别时自动包含全部低等级——`--level 2` 一条命令 = L0 测绘 + L1 端口面 + L2 深度探测，逐级数据回流，每台主机的成果增量落盘、中断可续跑。
+
+---
+
+## 4. L0 被动测绘（最常用）
+
+### 4.1 命令
+
+```bat
+recon-agent -t example.com --authorized --batch
+```
+
+参数逐个解释：
+
+| 片段 | 含义 |
+|---|---|
+| `-t 目标域名` | 目标域名（也可以是 IP；带 `--lab` 时可以是内网地址） |
+| `--authorized` | 声明"我已获合法授权"。不加这条，交互终端会追问你；batch 模式直接拒绝执行 |
+| `--batch` | 非交互一次跑完（HARD：此模式永久禁止 L2） |
+
+### 4.2 执行过程中你会看到
+
+```text
+recon-agent V1.0 — 信息搜集 AI Agent
+合规声明：仅用于已获合法授权的安全测试...
+[*] 开始 L0 被动采集: example.com（[🔒] 隐蔽约束全程生效）
+[!] C 段 93.184.216.0/24 已记录为范围外候选（仅记录不扫描）
+[+] 子域...（多源枚举进度）
+[+] 指纹 example.com: js库=jQuery [被动]
+─────────────────────────── 采集完成 ───────────────────────────
+[+] 报告: ...\reports\recon_hubu_edu_cn_20260930_174215.md
+[+] JSON: ...\recon_hubu_edu_cn_20260930_174215.json · CSV: ...csv
+[*] 工具调用 12（成功 75%）· 缓存命中 0% · ... 隐蔽违规 0（应 0）
+```
+
+**怎么判断成功**：出现 `───────── 采集完成 ─────────` 分节线 + 报告路径。
+
+### 4.3 L0 会自动完成的事（你不用做任何操作）
+
+1. **子域名枚举**（8 类数据源）：证书透明度日志链、被动 DNS（OTX/RapidDNS/HackerTarget/urlscan）、TLS 证书 SAN、600 词字典 DNS 验证、递归一层；
+2. **DNS 全记录**：A/MX/NS/TXT/SOA；
+3. **WHOIS**：注册信息两级查询；
+4. **IP/C 段**：解析并记录（C 段只记录永不扫描）；
+5. **基线指纹**：识别服务器/中间件/语言/框架/CMS/JS 库（带精确版本与来源标注）；
+6. **历史端点**（Wayback）与**子域接管候选**（CNAME 悬空检测）；
+7. **CVE 关联**（需先构建知识库，见第 13 章）；
+8. 生成**标准报告**（MD + JSON + CSV 三份）。
+
+### 4.4 实测参考数据（example.com）
+
+L0 一轮约 8-10 分钟，产出：77 个子域名、76 个存活、65 台端口推断、9+ 台系统识别（致远 OA/超星/青果教务等）。
+
+---
+
+## 5. L1 隐蔽端口扫描
+
+### 5.1 命令
+
+L1 端口扫描通过专用编排脚本执行（自带全程功能自检）：
+
+```bat
+.venv\Scripts\python -m scripts.l1_scan --target example.com --authorized
+```
+
+可选参数：`--note "授权说明"`——把授权背景写进审计日志（强烈建议填写）。
+
+### 5.2 它会做什么
+
+1. 先自检：确认 L0 级别下 L1 工具会被正确拒绝（门控功能验证）；
+2. 刷新一遍子域枚举（L0）；
+3. 对**主站 + 最多 10 台存活子域**做限速端口扫描（80, 443, 22, 8080, 8443, 3389）；
+4. 每台扫描后自动做功能 QA（限速耗时是否合规、失败是否即停等）；
+5. 生成标准报告，**端口列自动回填真实数据**。
+
+### 5.3 执行过程中你会看到
+
+```text
+[+] [QA] ✅ L0 下 L1 工具被门控拒绝
+[+] [QA] ✅ L1 显式声明生效
+[+] [QA] ✅ 限速合规 bs.example.com — 尝试 3 次，耗时 32.4s（下界 9s）
+[+] bs.example.com: 失败即停生效（HARD）
+[QA 清单结果]
+[*] QA 通过 19/20 · 扫描主机 11 台
+```
+
+**怎么判断成功**：QA 通过率 = 100%，或存在带"已定位修复"说明的已解决项。
+
+### 5.4 时间预期
+
+每台主机约 20-45 秒（限速所至，**这是特性不是卡顿**）。主站 + 10 台约 6-9 分钟。
+
+### 5.6 级联一键命令（自动包含 L0+L1）
+
+```bat
+recon-agent -t 目标 --authorized --level 1 --auto-confirm --note "授权说明"
+```
+
+（自动先完成 L0 测绘，再做 L1 端口面；已有数据的步骤自动跳过——增量可续跑。）
+
+### 5.5 想扫描全部存活子域的端口？
+
+```bat
+.venv\Scripts\python -m scripts.fill_l1_scan
+```
+
+（这是"填表模式"：自动跳过已扫过的主机、每 5 台落盘一次进度、中断后重跑自动续扫。76 台全量约 40-50 分钟。）
+
+---
+
+## 6. L2 深度指纹与路径枚举
+
+### 6.1 L2 能做而 L0 做不到的事
+
+L0 的指纹只靠"访问一次首页看特征"。很多网站隐藏了特征（比如 Server 头显示 `******`），
+L0 会诚实报告"未检出"。L2 用 WhatWeb 式多路径主动探测突破伪装：
+
+| 探测手段 | 原理 |
+|---|---|
+| 错误页指纹 | 访问一个不存在的路径，默认 404 页会暴露真实中间件（Tomcat/Spring/IIS/Nginx…） |
+| CMS 特征路径 | 访问 /wp-login.php、/wp-json/、/administrator/、/user/login 等登录面 |
+| favicon 指纹 | 计算 /favicon.ico 的 md5，跨主机同值 = 同一套系统部署 |
+| 敏感路径枚举 | 有界字典（后台/备份/.env/.git 等，≤60 条，绝不爆破） |
+
+### 6.2 级联一键命令（自动包含 L0+L1+L2，推荐）
+
+```bat
+recon-agent -t example.com --authorized --level 2 --auto-confirm --note "授权说明"
+```
+
+（自动完成 L0 测绘 → L1 全量端口面 → L2 深度指纹 76 台 + 高价值子域定向枚举 → 标准报告；已有成果自动跳过，中断可续跑。下面 6.3 的 fleet 脚本适合只跑 L2 深度阶段的场景。）
+
+### 6.3 只跑 L2 深度阶段（跳过 L0/L1）
+
+```bat
+.venv\Scripts\python -m scripts.fleet_l2 --target example.com --authorized --auto-confirm --note "课程项目测试，指导教师同意"
+```
+
+| 参数 | 含义 |
+|---|---|
+| `--auto-confirm` | 自动完成三次门控确认（**仅限授权目标**；不加此参数则逐条人工输入确认码） |
+| `--note "..."` | 授权背景写入审计日志 |
+
+> 不用 `--auto-confirm` 时，程序会依次要求你输入：① `CONFIRM 2` ② 目标精确域名
+> ③ `I UNDERSTAND AND AUTHORIZE`，且每个具体动作前还要逐个输 `yes`——这是刻意的防误操作设计。
+
+### 6.4 时间预期与断点续跑
+
+- 每台主机约 60-95 秒（限速所至）；**76 台全量约 90-120 分钟**；
+- 进度每 3 台自动落盘到 `reports\fleet_l2_state.json`；
+- **中断后直接重新运行同一条命令即可续跑**——已完成的台数自动跳过。
+
+### 6.5 定向扫描（只扫个别重点子域）
+
+```bat
+.venv\Scripts\python -m scripts.aggressive_l2 --target example.com --authorized --auto-confirm
+.venv\Scripts\python -m scripts.demo_l2 --target scanme.nmap.org --authorized
+```
+
+### 6.6 L2 实测能发现什么（example.com 真实案例）
+
+- 主站识别出**致远 OA** 框架（三轮 L0 "未检出"后被错误页指纹突破）；
+- `fssc`（财务共享）发现 **Spring Boot Actuator 未鉴权可访问**（高危）；
+- `oa`/`app`/`psy` 仅 HTTP 明文服务；
+- 全网 5 台资产运行致远 OA、4 台超星学习通。
+
+---
+
+## 7. 看懂报告（逐节讲解）
+
+报告固定为标准结构（`reports\recon_<目标>_<时间戳>.md`，另附同名 .json/.csv）：
+
+| 节 | 内容 | 你该关注什么 |
+|---|---|---|
+| 1 执行摘要 | 目标/级别/关键数字/指标 | 隐蔽违规必须为 0 |
+| 2 子域名清单 | 全部子域表格（编号/域名/存活状态） | 数量与存活比例 |
+| 3 存活资产总表 | **核心表**：资产/标题/端口/中间件/CMS/框架/前端/WAF/置信度 | "未探测"=没做 L1；"—"=诚实未识别 |
+| 4 技术栈明细 | 每条识别的来源与置信度 + L2 风险路径表 | 低于 0.7 的结论需人工核实 |
+| 5 拓线图 | Mermaid 关系图（GitHub/VSCode 可直接渲染） | — |
+| CVE 关联 | 基于指纹版本的漏洞匹配 | "未收录"=查不到，不是没有 |
+| 6 存疑清单 | 冲突/未确认项 | 需人工复核的清单 |
+| 7 降级清单 | 哪些结论来自降级实现（置信度已下调） | — |
+| 8 下一步建议 | 命令 + 目的 + 风险（L2 项标 ⚠️） | — |
+| 9 原始数据引用 | JSON/审计日志位置 | 复查证据用 |
+
+**三条阅读纪律**：① "未检出"≠"没有"；② 置信度 <0.7 的结论要人工核实；③ 所有高风险建议动作（L2）必须先有授权。
+
+---
+
+## 8. 环境自检 --doctor
+
+```bat
+recon-agent --doctor
+```
+
+输出一张体检表，逐项含义：
+
+| 检查项 | ✅ 表示 | ❌ 时的后果与处理 |
+|---|---|---|
+| Python ≥3.10 | 版本满足 | 换 Python 3.10+ |
+| 外部工具 nmap/httpx | 找到可执行文件 | 自动降级内置实现，可不管 |
+| 外部工具 bandit | 沙箱完整 | **必须装**：`.venv\Scripts\pip install bandit`，否则 L2 脚本探针拒绝执行 |
+| 外部工具 docker | 沙箱容器隔离可用 | 缺失时沙箱降级为宿主机直跑（会提示） |
+| 网络 DoH/CT源/Wayback | 对应数据源可达 | 不可达 → 对应功能降级，子域召回率下降 |
+| 模型 API Key | 检查常见供应商环境变量 | 自检不验证 YAML 中的 api_key；请按第 11 章配置连接 |
+| 审计日志哈希链 | 链完整条数 | 断裂 = 日志被篡改/删除，需排查 |
+| CVE 快照 | 快照文件存在 | 缺失 → 见第 13 章 |
+
+---
+
+## 9. 报告增量对比 --diff
+
+同一目标扫了两次，想知道"这次比上次多了什么"：
+
+```bat
+recon-agent -t example.com --authorized --batch --diff reports\recon_hubu_edu_cn_旧的那份.json
+```
+
+会在报告旁生成 `..._diff.md`，内容：子域/解析 IP/技术栈的新增（+）与消失（-）。
+
+---
+
+## 10. 接入 AI Agent（MCP）
+
+把本工具注册为 MCP 服务器后，Claude Desktop、ZCode 等 AI 助手即可**自主调用**它。
+
+### 10.1 启动服务器
+
+```bat
+.venv\Scripts\recon-agent-mcp --authorized-for example.com --allow-l1
+```
+
+- `--authorized-for`：声明授权范围（**必填**，逗号分隔多个域）；
+- `--allow-l1`：放行 L1 端口扫描（不加则只有 L0）；**L2 在 MCP 模式永久禁止**。
+
+### 10.2 接入 ZCode
+
+编辑 `C:\Users\你的用户名\.zcode\cli\config.json`，加入：
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "recon-agent": {
+        "command": "C:\\完整路径\\recon-agent\\.venv\\Scripts\\recon-agent-mcp.exe",
+        "args": ["--authorized-for", "example.com", "--allow-l1"]
+      }
+    }
+  }
+}
+```
+
+保存后重启 ZCode 会话即自动连接（Settings → MCP 可查看状态）。
+
+### 10.3 接入 Claude Desktop
+
+编辑 `claude_desktop_config.json`（设置 → 开发者 → 编辑配置），格式同上（顶层键为 `mcpServers`）。
+
+### 10.4 AI 会拿到哪些工具
+
+`dns_query`、`subdomain_enum`、`fingerprint`、`httpx_probe`、`nmap_scan`、`builtin_port_scan`、
+`dir_enum`、`script_probe`、`deep_fingerprint`、`takeover_check`、`wayback_urls`、`recon_safety_policy`
+（安全策略全文）。AI 调用受**与命令行完全相同**的安全约束。
+
+---
+
+## 11. LangGraph 交互会话
+
+标准安装已包含 LiteLLM、LangGraph 和 SQLite checkpoint 依赖；无需额外安装模型层。
+
+正常交互终端默认使用 TUI 界面，需要 Node.js ≥22.19.0 和本地固定版本 `@earendil-works/pi-tui` 1.0.4。
+在项目目录执行 `npm ci --ignore-scripts --prefix cli/tui`。wheel 安装后先执行
+`python -c "from cli.tui_bridge import TUI_DIR; print(TUI_DIR)"` 找到界面目录，在该目录执行 `npm ci --ignore-scripts`。
+`--ui rich` 选择 Rich 兼容界面；`--ui tui` 要求 TUI 依赖可用，否则明确退出；默认 `--ui auto` 依赖缺失时提示并回退。旧参数 `--ui pi` 保留为兼容别名。
+Python 后端继续负责模型、LangGraph、SQLite、范围、预算与门控；界面不继承模型 API Key。
+
+可以只用环境变量指定模型、API 请求根地址和 Key，无需修改 YAML。在仓库根目录打开 PowerShell：
+
+```powershell
+# 在仓库根目录执行
+$env:RECON_MODEL="openai/your-model"
+$env:RECON_API_BASE="https://your-endpoint.example/v1"
+$env:RECON_API_KEY="你的 Key"
+& '.\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized
+```
+
+上例使用仓库根目录已有的 `.venv`。模型选择优先级为 `--model` > 非空 `RECON_MODEL` > YAML `name`。
+非空 `RECON_API_BASE`、`RECON_API_KEY` 分别覆盖所选主模型的 YAML 地址和凭据，命名端点也适用；
+它们不覆盖 `fallback` 的模型、地址或 Key。变量未设置或全为空白时保留原配置；模型名和地址去除两端空白，Key 保留原内容。
+修改环境变量后退出并重新启动会话（可用会话 ID 恢复）。
+
+DeepSeek 的 OpenAI 兼容连接示例：`RECON_MODEL=openai/deepseek-flash`、
+`RECON_API_BASE=https://api.deepseek.com/v1`，Key 使用 `RECON_API_KEY`。
+`openai/` 指定请求协议，发送给服务器的模型名仍是 `deepseek-flash`。
+裸模型名可能无法被 LiteLLM 识别。出现“跳过备用模型 deepseek-chat”表示 YAML 的
+fallback 缺少自己的 `DEEPSEEK_API_KEY`；不表示主模型的 `RECON_API_KEY` 缺失。
+主模型可继续使用自己的连接；备用模型仍需独立配置。
+
+也可直接在 `config.yaml` 中填写连接。例如 OpenAI 兼容的自定义端点：
+
+```yaml
+model:
+  provider: litellm
+  name: openai/your-model
+  api_base: https://your-endpoint.example/v1
+  api_key: "填写你的 Key"
+  # api_key_env: CUSTOM_API_KEY  # 可选；api_key 为空时读取
+  fallback: []
+```
+
+`api_base` 填 API 根地址（一般以 `/v1` 结尾），不要填完整 `/chat/completions` 路径。
+`provider: litellm` 选择适配器；OpenAI 兼容端点的 `name` 使用 `openai/模型名` 选择协议。
+未设置非空 `RECON_API_KEY` 时，非空 `api_key` 优先于 `api_key_env`；空字符串或空白 Key 视为未填写。
+也可以设置 `api_key: ""`、`api_key_env: CUSTOM_API_KEY`，然后在 PowerShell 执行
+`$env:CUSTOM_API_KEY="你的 Key"`。指定环境变量但未设置、又没有直接 Key 时，该模型会报错或被 fallback 链跳过；
+两个凭据字段都不配置时，保留 LiteLLM 自己读取供应商环境变量的行为。
+
+`--model openai/another-model` 使用主连接的地址和凭据；`--model deepseek` 等命名端点命中
+`custom_endpoints` 的 `name` 或 `model` 时，先使用该端点自己的连接配置，再应用非空 `RECON_API_BASE`、`RECON_API_KEY`。
+旧端点字段 `base_url`、`api_key_env` 继续支持；端点也可填 `api_base`（优先于 `base_url`）和 `api_key`。
+`fallback` 每项使用匹配端点的独立连接，或供应商的默认连接与环境变量，不继承主模型地址和 Key。
+修改 YAML 或环境变量后退出并重新启动会话（可用会话 ID 恢复），让新进程重新加载配置。
+直接 Key 不写入配置对象的显示/导出、会话或报告；包含真实 Key 的 YAML 请保留在本机，不要提交到版本库。
+
+```powershell
+$env:OPENAI_API_KEY="你的key"  # 使用默认 OpenAI 配置且 api_key 为空时
+recon-agent --session -t example.com --authorized
+# 按启动输出的 ID 恢复（目标必须完全匹配）
+recon-agent --session --resume SESSION_ID -t example.com --authorized
+```
+
+启动只创建状态并等待 `recon>`，没有模型、工具或扫描请求。第一条自然语言任务才初始化模型。
+Pi 使用主屏滚动记录、逐段 Markdown 与底部 Loader；Shift+Enter 换行，上下键查看输入历史。
+任务运行中只接受状态、报告、stop、abort 和退出命令；Ctrl+C 取消并退出 130。
+界面断开也会取消运行中的 graph，保存用量后释放会话锁，可用启动输出的命令恢复。
+模型回复标为未验证，工具参数、推理标签与控制字符不直接显示；终态不重复已预览的答案或问题。
+输出重定向、非 TTY、dumb terminal 和 `--batch` 使用原纯文本路径，不改变 L2 限制。
+可以输入“仅查询 A 记录并总结来源”；程序展示计划和待确认问题，下一条输入回复当前问题。
+`状态/status` 查看进度；`报告/report` 保存当前证据而且留在 REPL，暂停时不会继续节点或调用模型。
+`stop` 取消任务；`abort` 取消并退回 L0，当前进程不再升级；`quit/退出`、EOF 或 Ctrl+C 安全关闭并保留待确认状态。
+
+会话 ID 保存在 Windows `%APPDATA%\recon-agent\agent_state.sqlite`，Linux 配置目录对应文件。
+恢复要求已有 checkpoint、相同目标及重新授权声明；同一会话不可同时被两个进程操作。
+每次重启都从 L0 开始，即使指定 `--level 2`。L1 一次确认，L2 三个独立精确码和每个动作确认，
+重启后必须重新授权。`--batch`/MCP 永久禁止 L2；非 TTY 默认不代填确认，授权自动化级联需显式指定 `--auto-confirm`，该选项不填写会话确认。
+`--resume` 必须配合 `--session`，不能与 `--mcp` 合用。
+
+模型配置错误、全部端点不可达或费用预算耗尽会暂停；修改连接配置后退出并重启恢复，费用等问题解决后可输入继续。
+
+上下文默认容量为 **100,000 tokens**，占用达到 **70%（约 70,000 tokens）** 时自动压缩较早的模型回复与工具结果，并继续任务。
+界面显示当前上下文占用、触发阈值和压缩记录；不展示累计 token 和金额。累计调用用量保存在后台，不再限制任务。
+压缩仅调整模型下一次请求使用的工作上下文，完整对话、证据和产物继续保存；恢复会话会接续已经压缩的内容。
+系统与用户指令、最近交互、任务计划和证据索引会保留。若这些必要内容仍超过容量，显示 `context_limit`，可精简输入、减少工具或用 `/new` 新建任务。
+
+后续可在 `config.yaml` 修改：
+
+```yaml
+CONTEXT_BUDGET: 100000
+COMPACT_TRIGGER_RATIO: 0.70
+```
+
+也可用 `--context-tokens 100000 --compact-ratio 0.7` 覆盖本次启动。
+费用预算维持原规则，追加费用使用 `/budget cost 1`（USD）。旧 `--max-tokens` 参数仅兼容接收并提示忽略，旧会话的 token 上限不再生效。
+会话不会自动转入流水线扫描。模型文字为未验证分析；完成采集任务需真实成功工具来源，
+无证据解释标 `[无证据]`。发生工具冲突保留双方；执行日志不确定时必须显式 retry/skip，不自动重试。
+
+`-o 目录 --output-format json` 指定报告目录及展示格式，始终保存 MD/JSON/CSV。
+JSON 完整保留每个工具的 data/stdout/stderr、来源、哈希、失败、事件、冲突及执行日志。
+报告有未完成/降级水印；模型费用分已知金额和未知定价调用，未知价格时无法证明精确成本上限。
+
+本阶段仅启用 durable 会话；Skill、RAG、工具组合和 MCP 标准升级后续实施。
+
+---
+
+## 12. 扫描自己的内网靶场 --lab
+
+内网/环回地址默认拒绝扫描。如果你要扫**自己搭建的靶场**（本机 DVWA、家庭路由器等）：
+
+```bat
+recon-agent -t 127.0.0.1 --authorized --lab --batch
+recon-agent -t 192.168.1.50 --authorized --lab --profile stealth
+```
+
+- `--lab` 仅解锁内网/环回目标，且前提是它们确实归你所有；
+- 绝对红线不受影响：`.gov/.mil/.gov.cn/.mil.cn` 与 `169.254` 元数据地址任何模式都拒绝。
+
+---
+
+## 13. CVE 知识库维护
+
+```bat
+.venv\Scripts\python -m knowledge.snapshot
+```
+
+联网从 OSV 拉取常见产品的漏洞数据，写入 `%APPDATA%\recon-agent\cve_snapshot\` 并附 SHA256 签名（防篡改）。
+建议每周跑一次。之后报告的"CVE 关联"节才会生效；查不到的产品硬输出"未收录"，**绝不编造 CVE 编号**。
+
+---
+
+## 14. 命令速查总表
+
+```bat
+:: ── 基础 ──
+recon-agent --version                                    :: 版本
+recon-agent --doctor                                     :: 环境自检
+.venv\Scripts\python -m pytest -q                        :: 冒烟与端到端（含 TUI）
+
+:: ── 工具优先原则：优先使用对应内置工具 ──
+:: 遇到问题 → 检查是否有对应工具 → 有则用工具 → 无则写脚本
+
+:: ── L0（被动，最常用）──
+recon-agent -t 目标 --authorized --batch               :: L0: dns_query + fingerprint
+recon-agent -t 目标 --authorized --batch --diff 旧报告.json  :: 增量对比
+recon-agent -t 目标 --authorized --batch -o D:\out     :: 指定输出目录（默认生成 Markdown + JSON + CSV）
+
+:: 具体工具调用示例：
+:: dns_query: recon-agent -t example.com --authorized --batch :: 查询 DNS 记录
+:: fingerprint: recon-agent -t http://example.com/ --authorized :: 识别技术栈
+:: port_scan: .venv\Scripts\python -m scripts.l1_scan --target example.com --authorized :: 端口扫描
+:: dir_enum: .venv\Scripts\python -m scripts.fleet_l2 --target example.com --authorized :: 路径枚举
+
+:: ── 级联（高级别自动包含低等级，推荐）──
+recon-agent -t 目标 --authorized --level 2 --auto-confirm --note "授权说明"
+recon-agent -t 目标 --authorized --level 1 --auto-confirm
+
+:: ── L1（端口，一次确认）──
+.venv\Scripts\python -m scripts.l1_scan --target 目标 --authorized
+.venv\Scripts\python -m scripts.fill_l1_scan             :: 全量端口面填补（可续跑）
+
+:: ── L2（深度，三次确认）──
+.venv\Scripts\python -m scripts.fleet_l2 --target 目标 --authorized --auto-confirm
+.venv\Scripts\python -m scripts.aggressive_l2 --target 目标 --authorized
+.venv\Scripts\python -m scripts.demo_l2 --target 目标 --authorized
+
+:: ── 会话（LLM）──
+recon-agent -t 目标 --authorized --session --model deepseek-chat
+
+:: ── MCP ──
+recon-agent-mcp --authorized-for 域名 --allow-l1
+
+:: ── 内网靶场 ──
+recon-agent -t 192.168.1.50 --authorized --lab --batch
+
+:: ── CVE 快照 ──
+.venv\Scripts\python -m knowledge.snapshot
+```
+
+---
+
+## 15. 故障排查（对照表）
+
+| 症状（你会看到） | 原因 | 解决步骤 |
+|---|---|---|
+| `[-] 未获授权：仅允许 --authorized...` | batch 模式未声明授权 | 加 `--authorized`；或在交互模式回答 yes |
+| `[合规拦截] 受保护 TLD 绝对拒绝` | 目标是 .gov/.mil 等 | 红线不可越过，换目标 |
+| `[合规拦截] 内网/环回地址默认拒绝（自有实验环境请加 --lab）` | 扫内网需声明 | 确认是你自己的环境后加 `--lab` |
+| `[门控] 当前级别 L0 不足（需 L1/L2）` | 主动探测未获对应确认 | 按第 5/6 章用对应脚本与参数 |
+| `[-] nmap 不可用 → builtin_socket` | 未装 nmap | 正常降级；需要更强覆盖时装 nmap |
+| `[sandbox] Bandit 拦截: bandit 未安装` | L2 脚本探针的三层校验缺一 | `.venv\Scripts\pip install bandit` |
+| `crt.sh 不可达` / `OTX... 429` | 第三方源抖动/限频 | 正常降级，其他源会补位；稍后重跑 |
+| `pip install` 超时/ReadTimeoutError | 网络慢 | 加 `--timeout 300 --retries 8` 重试 |
+| `No module named 'litellm'` | 未装模型层 | `.venv\Scripts\pip install litellm`（不影响 L0） |
+| 报告中文乱码 | 控制台编码 | 命令前执行 `set PYTHONIOENCODING=utf-8`，或用 Windows Terminal |
+| MCP 里看不到工具 | exe 路径/参数错误 | 核对 10.2 节 JSON；ZCode 看 Settings → MCP 状态 |
+| `审计哈希链...断裂` | 日志被改动或多进程交错 | 旧日志轮转存档后自动重新起链；已内置实时读尾修复 |
+| 级联在 L2 确认处 `Aborted.` | 非交互终端无法输入确认码 | 加 `--auto-confirm`（仅限授权目标），或改用交互终端逐条输入 |
+| 端口列 `未探测（需 L1 受控扫描）` | 该主机从未做过 L1 端口扫描 | 这是待办标记不是错误：按第 5 章跑 L1 后自动回填 |
+
+---
+
+## 16. 术语表
+
+| 术语 | 一句话解释 |
+|---|---|
+| L0/L1/L2 | 被动测绘 / 限速端口扫描 / 深度指纹与路径枚举——三级扫描深度 |
+| DoH | DNS over HTTPS：通过网页接口查询域名记录（不直接触碰目标） |
+| CT 日志 | 证书透明度日志：全球 HTTPS 证书的公开档案，可反查子域名 |
+| TLS SAN | HTTPS 证书里的"这个证书保护哪些域名"清单 |
+| CNAME | 域名别名记录；指向已注销的第三方服务时可被"接管" |
+| favicon md5 | 网站图标的哈希值；多台站点同值 = 同一套系统 |
+| Actuator | Spring Boot 的运维端点，暴露时可能泄露敏感配置 |
+| 降级模式 | 外部工具缺失时自动换用内置实现，置信度下调并在报告标注 |
+| 门控 | 高危动作前的人工确认机制（L1 一次 / L2 三次+签名+逐项） |
+| 签名文件 | L2 解锁后生成的授权凭证（会话内有效） |
+| 审计哈希链 | 每条操作记录链式哈希，任何篡改/删除可被检出 |
+| 增量续跑 | 长扫描中断后重跑，自动跳过已完成部分 |
+| 范围外候选 | 发现但未授权的关联资产：只记录，永不扫描 |
+
+---
+
+## 17. 文件位置速查
+
+| 内容 | 位置 |
+|---|---|
+| 扫描报告 | 项目目录 `reports\` |
+| 审计日志 | `%APPDATA%\recon-agent\audit.log`（哈希链） |
+| L2 签名文件 | `%APPDATA%\recon-agent\auth\<目标>.sig` |
+| 会话 checkpoint/执行日志 | `%APPDATA%\recon-agent\agent_state.sqlite` |
+| 语义缓存/落盘 | `%APPDATA%\recon-agent\cache\` |
+| CVE 快照 | `%APPDATA%\recon-agent\cve_snapshot\` |
+| 配置 | 项目根 `config.yaml`（模型）+ `utils\config.py`（安全常量） |
+
+---
+
+*recon-agent V1.0 · 遇到本手册未覆盖的问题：先跑 `--doctor`，再查 `docs\knowledge-map.md` 第 10 层调试案例库。*
