@@ -36,3 +36,13 @@ GitHub Actions 原本已位于根目录；本次移除其指向旧版本目录�
 - 在仓库外启动已安装 CLI 的 `--version` 通过。
 - 根目录完整 pytest：17 passed，包含 TUI 冒烟与端到端测试。
 - Linux 与 GitHub Actions 远端执行尚未验证；工作流保留原双平台矩阵。
+
+## 上游 main 合并
+
+合并 `fd9c850` 时将新增工具、技能及测试迁入根目录结构，保留第三方工具原始内容。新增 HTTP 范围限制和其他上游功能随代码合并；README 的功能说明同步保留。
+
+原 `tests/unit/test_full_scan.py` 的删除/修改冲突按保留上游回归用例解决，连同另外三个新增测试置于 `tests/unit/`。默认测试入口不变，可显式运行这些历史用例。
+
+`tools/data/nuclei-readonly-status.yaml` 与 `tools/data/skills/NOTICE.md` 仍被现有文档引用，保留示例和来源说明。第三方文件保留上游格式；项目自有代码通过差异空白检查。
+
+合并后验证：`python -m pytest -q tests/smoke tests/e2e tests/unit` 全部 33 项通过；wheel 构建通过且未包含第三方工具目录，文档本地链接无断链。首次 TUI 测试超时，单独重跑及随后完整重跑均通过。

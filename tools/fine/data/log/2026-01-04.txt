@@ -1,0 +1,5 @@
+time="2026-01-04T21:55:24+08:00" level=info msg="config file not found, generating default config file..." func="mfinder/backend/application.(*Application).generateConfigFile" file="app.go:637"
+time="2026-01-04T21:55:24+08:00" level=info msg="未检测到微信小程序路径，请手动配置" func="mfinder/backend/application.(*Application).detectWeChatAppletPathWindows" file="app.go:481"
+time="2026-01-04T21:55:24+08:00" level=info msg="generate default config file successfully, locate at F:\\TH3\\tools\\gui_shouji\\fine\\config.yaml, run with default config" func="mfinder/backend/application.(*Application).generateConfigFile" file="app.go:657"
+time="2026-01-04T21:55:24+08:00" level=info msg="set timeout 20.000000s" func="mfinder/backend/application.(*Application).generateConfigFile" file="app.go:661"
+time="2026-01-04T21:55:24+08:00" level=info msg="icp proxy disabled using global proxy" func="mfinder/backend/service/service/icp.(*Bridge).SetProxy" file="bridge.go:452"

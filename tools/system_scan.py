@@ -1,5 +1,2 @@
-"""Compatibility alias for tools.builtin.system_scan."""
-import importlib
-import sys
-
-sys.modules[__name__] = importlib.import_module("tools.builtin.system_scan")
+import importlib as _importlib, sys as _sys
+_sys.modules[__name__] = _importlib.import_module("tools.builtin.system_scan")

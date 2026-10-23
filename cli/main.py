@@ -76,7 +76,7 @@ def run(
     diff: str = typer.Option(None, "--diff", help="与旧报告 JSON 对比，生成增量差异文件"),
     note: str = typer.Option("", "--note", help="授权背景说明（写入审计日志）"),
     auto_confirm: bool = typer.Option(False, "--auto-confirm",
-                                      help="L2 自动注入三次门控确认（仅限授权测试目标/非交互自动化）"),
+                                      help="显式启用 L2 自动门控确认（仅限授权测试目标）"),
     tools_config: Path = typer.Option(None, '--tools-config', help='自定义工具和外部 MCP 配置 YAML'),
     list_tools: bool = typer.Option(False, '--list-tools', help='离线列出可用工具和最低级别后退出'),
     doctor: bool = typer.Option(False, "--doctor", callback=_doctor_callback, is_eager=True,
@@ -205,10 +205,22 @@ def run(
 
             return await full_cascade(
                 target=target, authorized=True, level=requested,
-                auto_confirm=auto_confirm or (not is_tty), note=note, settings=settings)
+                auto_confirm=auto_confirm, note=note, settings=settings)
+        # 关键策略变更：当请求 L1/L2 级别时，自动先执行 L0（被动测绘）
+        # - 交互模式：requested >= 1 时触发 full_cascade（L0→L1→L2 级联）
+        # - batch 模式：L1/L2 永久禁止（HARD），但仍确保 L0 基线执行
+        # - 任何模式下的扫描起点都是 L0，符合"高等级时默认自动进行低等级扫描"的策略
+        if requested >= 1 and not batch:
+            # 交互模式：请求高级别时自动执行全部低等级扫描（级联）
+            from scripts.full_scan import run as full_cascade
+
+            return await full_cascade(
+                target=target, authorized=True, level=requested,
+                auto_confirm=auto_confirm, note=note, settings=settings)
+        # batch 模式或级别为 0：至少执行 L0（被动测绘），确保任何模式起点均为 L0
         return await pipeline.run_pipeline(
             target=target, settings=settings, batch=batch, is_tty=is_tty,
-            requested_level=requested, model_override=model,
+            requested_level=max(requested, 0), model_override=model,
             output_format=output_format, output_dir=output, diff_path=diff,
         )
 

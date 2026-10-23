@@ -1,5 +1,2 @@
-"""Compatibility alias for tools.runtime.evidence_tools."""
-import importlib
-import sys
-
-sys.modules[__name__] = importlib.import_module("tools.runtime.evidence_tools")
+import importlib as _importlib, sys as _sys
+_sys.modules[__name__] = _importlib.import_module("tools.runtime.evidence_tools")

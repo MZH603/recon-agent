@@ -154,7 +154,7 @@ class ToolRegistry:
 
 
 def build_default(settings: Settings, gate: ScanGate, main_target: str, *, session_id=None) -> ToolRegistry:
-    """构建默认工具集：外部工具缺失时各工具内部自动降级到 builtin 实现。"""
+    """构建内置工具及用户显式配置启用的集成工具。"""
     registry = ToolRegistry(settings, gate, main_target)
     registry.register(DNSQueryTool(settings))
     registry.register(SubdomainEnumTool(settings))  # L0：子域枚举+递归拓线
@@ -170,21 +170,27 @@ def build_default(settings: Settings, gate: ScanGate, main_target: str, *, sessi
     registry.register(SystemScanTool(settings))     # L2：系统安全工具网关
     from tools.builtin.api_recon import ApiReconTool
     from tools.adapters.custom import build_custom_tools
-    from tools.runtime.evidence_tools import build_evidence_tools
     from tools.adapters.mcp_tools import build_mcp_tools
-    from tools.runtime.catalog import ToolCatalogTool
-    registry.register(ApiReconTool(settings), replace=False)
-    registry.register(ToolCatalogTool(registry), replace=False)
-    for tool in [*build_evidence_tools(settings), *build_custom_tools(settings),
-                 *build_mcp_tools(settings, main_target)]:
-        registry.register(tool, replace=False)
     from tools.adapters.scanners import build_scanner_tools
     from tools.adapters.search import build_search_tools
     from tools.adapters.proxy import build_proxy_tools
+    from tools.runtime.evidence_tools import build_evidence_tools
+    from tools.runtime.catalog import ToolCatalogTool
     from tools.runtime.knowledge import build_knowledge_tools
     from tools.runtime.workspace import build_workspace_tools
-    for tool in [*build_scanner_tools(settings), *build_search_tools(settings),
-                 *build_proxy_tools(settings), *build_knowledge_tools(settings),
-                 *build_workspace_tools(settings, session_id)]:
+
+    registry.register(ApiReconTool(settings), replace=False)
+    registry.register(ToolCatalogTool(registry), replace=False)
+    integrations = [
+        *build_evidence_tools(settings),
+        *build_custom_tools(settings),
+        *build_mcp_tools(settings, main_target),
+        *build_scanner_tools(settings),
+        *build_search_tools(settings),
+        *build_proxy_tools(settings),
+        *build_knowledge_tools(settings),
+        *build_workspace_tools(settings, session_id),
+    ]
+    for tool in integrations:
         registry.register(tool, replace=False)
     return registry

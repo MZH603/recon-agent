@@ -47,9 +47,12 @@ def load_state(target: str) -> dict:
     path = _state_path(target)
     if path.exists():
         state = json.loads(path.read_text(encoding="utf-8"))
-        cards = state.get("deep_cards", [])
+        cards = [card for card in state.get("deep_cards", [])
+                 if not card.get("error")]
+        dir_results = [result for result in state.get("dir_results", [])
+                       if result.get("success")]
         return {"deep_cards": cards,
-                "dir_results": state.get("dir_results", []),
+                "dir_results": dir_results,
                 "port_map": state.get("port_map", {}),
                 "subdomains": state.get("subdomains", []),
                 "alive": state.get("alive", []),
@@ -103,14 +106,16 @@ def make_cascade_gate(target: str, level: int, auto_confirm: bool) -> ScanGate:
     return ScanGate(target, batch_mode=False, is_tty=sys.stdin.isatty(), requested_level=level)
 
 
-async def stage_l0(target: str, registry, builder: ReportBuilder, settings) -> list[str]:
+async def stage_l0(
+    target: str, registry, builder: ReportBuilder, settings
+) -> list[str] | None:
     section("Stage L0 · 被动测绘")
     sub = await registry.execute(NormalizedToolCall(
         id="fs-sub", name="subdomain_enum",
         arguments={"target": target, "recursive": True, "brute": True, "max_hosts": 100}))
     if not sub.success:
         err(f"子域枚举失败: {sub.error[:120]}")
-        return [target]
+        return None
     alive = [a["host"] for a in sub.data["alive"] if a["host"] != target] + [target]
     builder.add_subdomains(sub.data["subdomains"], [a["host"] for a in sub.data["alive"]])
 
@@ -163,9 +168,11 @@ async def stage_l1(target: str, alive: list[str], registry, builder: ReportBuild
 
 
 async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuilder,
-                   state: dict, done_hosts: set[str]) -> None:
+                   state: dict, done_hosts: set[str], gate: ScanGate) -> None:
     section(f"Stage L2 · 深度指纹（待扫 {len([h for h in alive if h not in done_hosts])} 台）")
     for index, host in enumerate(alive, 1):
+        if gate.current_level() < 2:
+            return
         if host in done_hosts:
             info(f"[{index}/{len(alive)}] {host} 已有深度卡片（跳过）")
             continue
@@ -183,6 +190,8 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
             state["deep_cards"].append({"host": host, "error": result.error[:160]})
             err(f"[{index}/{len(alive)}] {host}: {result.error[:120]}")
         save_state(target, state)  # HARD: 每台落盘（非整轮结束才写）
+        if gate.current_level() < 2:
+            return
 
     section("Stage L2 · 高价值子域定向路径枚举")
     interesting = set()
@@ -198,7 +207,10 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
     dir_targets = sorted(interesting)[:10]
     ok(f"定向枚举目标 {len(dir_targets)} 台")
     for host in dir_targets:
-        if any(d["target"] == host for d in state["dir_results"]):
+        if gate.current_level() < 2:
+            return
+        if any(d["target"] == host and d.get("success")
+               for d in state["dir_results"]):
             continue
         result = await registry.execute(NormalizedToolCall(
             id=f"fs-dir-{host}", name="dir_enum",
@@ -208,6 +220,8 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
         builder.add_dir_enum(host, result)   # result 即 ToolResult（修复 tr_json 未定义回归）
         save_state(target, state)
 
+    if gate.current_level() < 2:
+        return
     probe = await registry.execute(NormalizedToolCall(
         id="fs-probe", name="script_probe",
         arguments={"target": target, "code": PROBE_CODE.replace("__TARGET__", target)}))
@@ -238,6 +252,9 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
         builder.add_tech_cards(state["deep_cards"])
 
         alive = await stage_l0(target, registry, builder, settings)
+        if alive is None:
+            err("资产枚举未完成；为避免遗漏授权资产，已停止后续 L1/L2。")
+            return 2
         state["subdomains"] = builder.data.subdomains
         state["alive"] = alive
 
@@ -255,7 +272,7 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
                     break
             else:
                 ok(f"L2 已解锁，签名校验: {gate.verify_signature()}")
-                await stage_l2(target, alive, registry, builder, state, done_hosts)
+                await stage_l2(target, alive, registry, builder, state, done_hosts, gate)
 
         builder.data.scan_level = gate.current_level()
         metrics = TaskMetrics()

@@ -27,6 +27,8 @@ class ToolWaiter:
         if value is None and manager is not None:
             config = manager.configs.get(getattr(params, 'server', ''))
             value = getattr(config, 'timeout_seconds', None)
+        if value is None and tool.name == 'subdomain_enum':
+            value = self.settings.SUBDOMAIN_ENUM_TIMEOUT_SECONDS
         if value is None and tool.name == 'api_recon':
             value = self.settings.API_RECON_TIMEOUT_SECONDS
         return value or self.settings.TOOL_TIMEOUT_SECONDS

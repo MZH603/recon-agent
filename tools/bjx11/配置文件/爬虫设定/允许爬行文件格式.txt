@@ -1,0 +1,1 @@
+.html|.htm|.php|.asp|.jsp|.cfm|.aspx|.sthml|.stm|.shtm|.cgi|.do|.action|.jhtml|

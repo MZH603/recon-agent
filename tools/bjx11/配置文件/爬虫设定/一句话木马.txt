@@ -1,0 +1,1 @@
+<?php @eval|<%eval request|<%eval(Request|<?php $_GET[a]($_GET[b]);?>|<?php ($_=@$_GET[2])|($b4dboy = $_POST['b4dboy'])|$b4dboy = $_POST['b4dboy|trim($_POST['code']);| <%execute(reques|<script language=VBScript|

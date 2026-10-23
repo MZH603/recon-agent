@@ -94,6 +94,7 @@ class Settings(BaseModel):
     extension_tools: ExtensionToolsConfig = Field(default_factory=ExtensionToolsConfig)
     TOOL_EVIDENCE_DIR: str = ""
     TOOL_TIMEOUT_SECONDS: float = Field(default=120, gt=0,allow_inf_nan=False)
+    SUBDOMAIN_ENUM_TIMEOUT_SECONDS: float = Field(default=1800, ge=120, le=3600)
     TOOL_CLEANUP_SECONDS: float = Field(default=5, gt=0,allow_inf_nan=False)
     TOOL_TIMEOUT_OVERRIDES: dict[str, float] = Field(default_factory=dict)
     TOOL_RESULT_MAX_BYTES: int = Field(default=16000, ge=1024)
@@ -161,4 +162,3 @@ class Settings(BaseModel):
 def get_settings() -> Settings:
     """进程级单例（HARD：任何模块不得绕过 Settings 自定阈值）。"""
     return Settings.load()
-
