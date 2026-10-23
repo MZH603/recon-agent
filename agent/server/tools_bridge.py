@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 
 from agent.gate.scan_gate import ScanGate
@@ -38,6 +39,8 @@ class MCPBridge:
             requested_level=1 if allow_l1 else 0, auth_dir=None,
         )
         self._registries: dict[str, ToolRegistry] = {}
+        self._started_roots: set[str] = set()
+        self._start_locks: dict[str, asyncio.Lock] = {}
         audit("mcp_bridge_init", {"roots": self._roots, "allow_l1": allow_l1})
 
     def tool_schemas(self) -> list[dict]:
@@ -69,6 +72,20 @@ class MCPBridge:
                    f"{self._roots} 内；范围外资产仅可记录，禁止调用（HARD）")
             return msg, True
         registry = self._registry(root)
+        if root not in self._started_roots and registry.plugin_host is not None:
+            async with self._start_locks.setdefault(root, asyncio.Lock()):
+                if root not in self._started_roots:
+                    try:
+                        await registry.plugin_host.start(self)
+                    except BaseException:
+                        try:
+                            await registry.aclose()
+                        except BaseException:
+                            pass  # Keep the startup failure visible.
+                        finally:
+                            self._registries.pop(root, None)
+                        raise
+                    self._started_roots.add(root)
         result = await registry.execute(NormalizedToolCall(id=f"mcp-{name}", name=name,
                                                            arguments=arguments or {}))
         return self._render(result), not result.success
@@ -80,8 +97,15 @@ class MCPBridge:
         return self._registries[root]
 
     async def aclose(self) -> None:
+        errors = []
         for registry in self._registries.values():
-            await registry.aclose()
+            try:
+                await registry.aclose()
+            except BaseException as exc:
+                errors.append(exc)
+        self._started_roots.clear()
+        if errors:
+            raise errors[0]
 
     @staticmethod
     def _render(result: ToolResult) -> str:

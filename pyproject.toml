@@ -27,9 +27,10 @@ recon-agent-mcp = "agent.server.mcp_server:main"
 [tool.setuptools.packages.find]
 namespaces = false
 include = ["agent*", "tui*"]
+# agent.plugins is a regular package and is included by this pattern.
 
 [tool.pytest.ini_options]
-testpaths = ["tests/smoke", "tests/e2e"]
+testpaths = ["tests/smoke", "tests/e2e", "tests/unit"]
 addopts = "--strict-markers --strict-config"
 markers = [
     "smoke: 真实程序入口的启动与关键拒绝路径检查",

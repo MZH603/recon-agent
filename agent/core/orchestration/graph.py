@@ -93,6 +93,8 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                     initial_state(self.session_id, self.target, self.system_prompt), as_node='decide')
             self.registry.select_tools(snapshot.values.get('selected_tool_names', []))
             await self._restore_budget()
+            if self.registry.plugin_host is not None:
+                await self.registry.plugin_host.start(self)
             return self
         except BaseException:
             try:

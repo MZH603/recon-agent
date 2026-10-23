@@ -7,18 +7,6 @@ from agent.gate.scan_gate import ScanGate
 from agent.model.base import NormalizedToolCall
 from agent.security.stealth import allowed_target, is_in_scope
 from agent.tools.base import BaseTool, ToolResult
-from agent.tools.builtin.dns_query import DNSQueryTool
-from agent.tools.builtin.fingerprint import FingerprintTool
-from agent.tools.builtin.port_scan import BuiltinPortScan
-from agent.tools.builtin.deep_fingerprint import DeepFingerprintTool
-from agent.tools.builtin.dir_enum import DirEnumTool
-from agent.tools.builtin.httpx_tool import HttpxProbeTool
-from agent.tools.builtin.nmap_tool import NmapTool
-from agent.tools.builtin.script_probe import ScriptProbeTool
-from agent.tools.builtin.subdomain_enum import SubdomainEnumTool
-from agent.tools.builtin.system_scan import SystemScanTool
-from agent.tools.builtin.takeover_check import TakeoverCheckTool
-from agent.tools.builtin.wayback_urls import WaybackTool
 from agent.utils.config import Settings
 from agent.utils.logger import audit
 
@@ -33,6 +21,7 @@ class ToolRegistry:
         self._tools: dict[str, BaseTool] = {}
         self._selected: set[str] = set()
         self._closed = False
+        self.plugin_host = None
         from agent.tools.runtime.execution_wait import ToolWaiter
         self.waiter = ToolWaiter(settings)
 
@@ -80,14 +69,22 @@ class ToolRegistry:
         if self._closed:
             return
         self._closed = True
-        await self.waiter.close()
+        errors = []
+        if self.plugin_host is not None:
+            try:
+                await self.plugin_host.close()
+            except BaseException as exc:
+                errors.append(exc)
+        try:
+            await self.waiter.close()
+        except BaseException as exc:
+            errors.append(exc)
         import asyncio
         closing = set()
         for tool in self._tools.values():
             close = getattr(tool, 'aclose', None)
             if close is not None:
                 closing.add(asyncio.create_task(close()))
-        errors = []
         if closing:
             done, pending = await asyncio.wait(closing, timeout=self._settings.TOOL_CLEANUP_SECONDS)
             for task in done:
@@ -154,43 +151,11 @@ class ToolRegistry:
 
 
 def build_default(settings: Settings, gate: ScanGate, main_target: str, *, session_id=None) -> ToolRegistry:
-    """构建内置工具及用户显式配置启用的集成工具。"""
+    """Compatibility wrapper for the built-in provider and enabled plugins."""
+    from agent.plugins.builtin_tools import BuiltinTools
+    from agent.plugins.host import PluginHost
     registry = ToolRegistry(settings, gate, main_target)
-    registry.register(DNSQueryTool(settings))
-    registry.register(SubdomainEnumTool(settings))  # L0：子域枚举+递归拓线
-    registry.register(FingerprintTool(settings))
-    registry.register(HttpxProbeTool(settings))
-    registry.register(NmapTool(settings))
-    registry.register(BuiltinPortScan(settings))
-    registry.register(DirEnumTool(settings))      # L2：三级门控 + 逐项确认
-    registry.register(ScriptProbeTool(settings))  # L2：三层沙箱
-    registry.register(DeepFingerprintTool(settings))  # L2：WhatWeb 式深度指纹
-    registry.register(TakeoverCheckTool(settings))  # L0：子域接管候选
-    registry.register(WaybackTool(settings))        # L0：历史端点
-    registry.register(SystemScanTool(settings))     # L2：系统安全工具网关
-    from agent.tools.builtin.api_recon import ApiReconTool
-    from agent.tools.adapters.custom import build_custom_tools
-    from agent.tools.adapters.mcp_tools import build_mcp_tools
-    from agent.tools.adapters.scanners import build_scanner_tools
-    from agent.tools.adapters.search import build_search_tools
-    from agent.tools.adapters.proxy import build_proxy_tools
-    from agent.tools.runtime.evidence_tools import build_evidence_tools
-    from agent.tools.runtime.catalog import ToolCatalogTool
-    from agent.tools.runtime.knowledge import build_knowledge_tools
-    from agent.tools.runtime.workspace import build_workspace_tools
-
-    registry.register(ApiReconTool(settings), replace=False)
-    registry.register(ToolCatalogTool(registry), replace=False)
-    integrations = [
-        *build_evidence_tools(settings),
-        *build_custom_tools(settings),
-        *build_mcp_tools(settings, main_target),
-        *build_scanner_tools(settings),
-        *build_search_tools(settings),
-        *build_proxy_tools(settings),
-        *build_knowledge_tools(settings),
-        *build_workspace_tools(settings, session_id),
-    ]
-    for tool in integrations:
-        registry.register(tool, replace=False)
+    plugin_host = PluginHost(registry)
+    plugin_host.load_enabled(settings, builtin=BuiltinTools(settings, main_target, session_id))
+    registry.plugin_host = plugin_host
     return registry

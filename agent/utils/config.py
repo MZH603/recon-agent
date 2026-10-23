@@ -5,7 +5,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer, field_validator, model_validator
 
 from agent.platforms.paths import get_config_dir
 from agent.tools.adapters.integration_config import CustomToolConfig, MCPServerConfig
@@ -53,6 +53,23 @@ class ModelConfig(BaseModel):
                 for endpoint in endpoints]
 
 
+class PluginReference(BaseModel):
+    """An explicit local module or installed entry point and its private config."""
+
+    model_config = ConfigDict(extra='forbid')
+    id: str
+    module: str | None = None
+    path: str | None = None
+    entry_point: str | None = None
+    config: dict = Field(default_factory=dict)
+
+    @model_validator(mode='after')
+    def one_source(self):
+        if sum(bool(source) for source in (self.module, self.path, self.entry_point)) != 1:
+            raise ValueError('Exactly one of module, path or entry_point is required')
+        return self
+
+
 class Settings(BaseModel):
     """全局安全与运行常量（HARD：不可被 LLM 覆盖，只能由用户在配置文件修改）。"""
 
@@ -92,6 +109,7 @@ class Settings(BaseModel):
     custom_tools: list[CustomToolConfig] = Field(default_factory=list)
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     extension_tools: ExtensionToolsConfig = Field(default_factory=ExtensionToolsConfig)
+    plugins: list[PluginReference] = Field(default_factory=list)
     TOOL_EVIDENCE_DIR: str = ""
     TOOL_TIMEOUT_SECONDS: float = Field(default=120, gt=0,allow_inf_nan=False)
     SUBDOMAIN_ENUM_TIMEOUT_SECONDS: float = Field(default=1800, ge=120, le=3600)

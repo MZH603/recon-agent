@@ -18,7 +18,7 @@ def create_session_runtime(*, target, settings, batch, is_tty, model_override=No
 
     identifier = resume_id or session_id or uuid4().hex
     gate = ScanGate(target, batch_mode=batch, is_tty=is_tty, requested_level=0)
-    # SessionRuntime binds workspace tools to identifier before any tool runs.
+    # Providers register during construction; SessionRuntime starts them on entry.
     # Keep the existing three-argument registry factory injection contract.
     registry = build_default(settings, gate, target)
     llm = LazyLLM(settings, model_override, llm_factory,

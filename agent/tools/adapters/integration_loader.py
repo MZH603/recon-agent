@@ -6,7 +6,7 @@ import yaml
 from agent.utils.config import Settings
 
 EXTENSION_KEYS = {
-    "custom_tools", "mcp_servers", "extension_tools", "TOOL_EVIDENCE_DIR",
+    "custom_tools", "mcp_servers", "extension_tools", "plugins", "TOOL_EVIDENCE_DIR",
     "API_RECON_MAX_REQUESTS", "API_RECON_MAX_ASSET_BYTES", "API_RECON_TIMEOUT_SECONDS",
 }
 
