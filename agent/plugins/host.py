@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from importlib import import_module, metadata, util
 from pathlib import Path
 
@@ -16,6 +18,7 @@ class PluginHost:
     def __init__(self, registry):
         self.registry = registry
         self._providers = []
+        self._configs = {}
         self._started = []
         self._closed = False
         self._active = False
@@ -185,6 +188,23 @@ class PluginHost:
         finally:
             self._remaining_names = None
         self._providers = ordered
+        self._configs = configs
+
+    def snapshot(self):
+        """Stable, secret-free identity of the providers bound to a session."""
+        entries = []
+        for provider in self._providers:
+            manifest = provider.manifest
+            config = self._configs[manifest.id]
+            payload = config.model_dump(mode='json') if hasattr(config, 'model_dump') else config
+            if callable(getattr(provider, 'snapshot_config', None)):
+                payload = {'config': payload, 'provider': provider.snapshot_config()}
+            encoded = json.dumps(payload, sort_keys=True, separators=(',', ':'),
+                                 ensure_ascii=False, allow_nan=False).encode('utf-8')
+            entries.append({'id': manifest.id, 'version': manifest.version,
+                            'api_version': manifest.api_version,
+                            'config_digest': hashlib.sha256(encoded).hexdigest()})
+        return entries
 
     async def start(self, session_view):
         async with self._lifecycle_lock:

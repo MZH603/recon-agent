@@ -32,3 +32,15 @@ def test_mcp_requires_scope(run_app):
     assert result.returncode == 2, result.stdout + result.stderr
     assert result.stdout == ""
     assert "--authorized-for" in result.stderr
+
+
+def test_session_plugin_load_error_is_actionable(run_app, tmp_path):
+    config = tmp_path / 'plugins.yaml'
+    config.write_text('plugins:\n  - id: missing-source\n    module: definitely_missing_recon_plugin\n',
+                      encoding='utf-8')
+    result = run_app('--session', '-t', 'example.com', '--authorized', '--ui', 'rich',
+                     '--tools-config', str(config), input_text='quit\n')
+    assert result.returncode == 2
+    assert '会话无法打开' in result.stdout + result.stderr
+    assert 'definitely_missing_recon_plugin' in result.stdout + result.stderr
+    assert 'Traceback' not in result.stdout + result.stderr

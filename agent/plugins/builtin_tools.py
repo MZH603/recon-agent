@@ -13,6 +13,17 @@ class BuiltinTools:
         self.main_target = main_target
         self.session_id = session_id
 
+    def snapshot_config(self):
+        """Effective connector settings that change this provider's tool behavior."""
+        settings = self.settings
+        keys = ('custom_tools', 'mcp_servers', 'extension_tools', 'TOOL_EVIDENCE_DIR',
+                'TOOL_TIMEOUT_SECONDS', 'SUBDOMAIN_ENUM_TIMEOUT_SECONDS',
+                'TOOL_CLEANUP_SECONDS', 'TOOL_TIMEOUT_OVERRIDES',
+                'TOOL_RESULT_MAX_BYTES', 'API_RECON_MAX_REQUESTS',
+                'API_RECON_MAX_ASSET_BYTES', 'API_RECON_TIMEOUT_SECONDS')
+        values = settings.model_dump(mode='json')
+        return {key: values[key] for key in keys}
+
     def describe_tool_names(self, validated_config):
         """Declare the complete config-dependent catalog without constructing tools."""
         from agent.tools.adapters.scanners import NAMES

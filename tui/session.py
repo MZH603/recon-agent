@@ -349,9 +349,13 @@ async def run_tui_session(target, settings, batch, is_tty, requested_level, mode
     if output_format not in ('markdown', 'json', 'csv'):
         err('报告格式必须为 markdown/json/csv')
         return 2
-    runtime = create_session_runtime(target=target, settings=settings, batch=batch,
-        is_tty=is_tty, model_override=model_override, resume_id=resume_id,
-        session_id=session_id, llm_factory=llm_factory, connection_override=connection_override)
+    try:
+        runtime = create_session_runtime(target=target, settings=settings, batch=batch,
+            is_tty=is_tty, model_override=model_override, resume_id=resume_id,
+            session_id=session_id, llm_factory=llm_factory, connection_override=connection_override)
+    except (ValueError, RuntimeError, OSError, ImportError) as exc:
+        err('TUI 会话无法打开: ' + safe_text(str(exc)))
+        return 2
     gate, identifier = runtime.gate, runtime.session_id
     child = None
     unexpected_disconnect = False
@@ -384,8 +388,8 @@ async def run_tui_session(target, settings, batch, is_tty, requested_level, mode
                 result = await serve_runtime(runtime, gate, bridge, report)
                 unexpected_disconnect = result == 2
             return result
-    except (ValueError, RuntimeError, OSError, asyncio.TimeoutError):
-        err('TUI 会话无法打开，请检查本地 Node/TUI 安装与会话 ID。')
+    except (ValueError, RuntimeError, OSError, ImportError, asyncio.TimeoutError) as exc:
+        err('TUI 会话无法打开: ' + safe_text(str(exc)))
         return 2
     finally:
         if child:

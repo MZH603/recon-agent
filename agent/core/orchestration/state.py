@@ -4,6 +4,7 @@ from uuid import uuid4
 
 
 class SessionState(TypedDict, total=False):
+    plugin_snapshot: list[dict[str, str]]
     loop_id: str
     loop_state: dict[str, dict[str, Any]]
     loop_turns: int

@@ -6,6 +6,9 @@
 
 [项目架构](docs/architecture.md) · [扩展工具接入](docs/tool-integrations.md) · [使用说明书](docs/user-guide.md) · [项目说明书](docs/project-overview.md) · [知识骨架](docs/knowledge-map.md)
 
+交互会话支持显式启用的 Python 工具、上下文与 Agent loop 插件，默认使用内置 ReAct。
+插件配置、版本固定和恢复规则见 [Python 插件接入](docs/tool-extensions.md#python-插件)。
+
 仓库根目录即 Python 项目根目录。目录职责、命名和验证要求见 [贡献规范](CONTRIBUTING.md)，文档入口见 [文档索引](docs/README.md)。
 
 ## 安装与启动

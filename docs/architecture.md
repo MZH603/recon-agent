@@ -9,6 +9,7 @@ Python 项目位于仓库根目录，安装与打包入口为 `pyproject.toml`�
 agent/
   cli/                    CLI 参数、配置、确定性流水线及文本会话
   core/                   Agent 主循环、会话工厂和提示词
+  plugins/                版本化工具、上下文和循环插件宿主及内置实现
   model/                  模型协议、适配和调用
   tools/                  工具契约、注册、内置工具和资源
   gate/、security/         授权等级、目标范围与扫描约束
@@ -53,6 +54,20 @@ docs/                    正式项目文档
 Agent 主循环为 `decide → validate → authorize → execute → evaluate`。
 需要输入、授权或恢复处理时暂停；工具结果回到模型，模型可继续多步调用。
 正文末尾的 `<task_complete/>` 表示模型提出完成，运行时按已有规则判断是否结束。
+
+`PluginHost` 在会话构造阶段验证清单、配置、依赖和工具名，再注册内置及显式启用的插件；
+进入会话后才按顺序调用 `start`，关闭时逆序调用 `close`。工具插件共用 `ToolRegistry` 的
+校验、范围、授权和执行日志；上下文插件只提供带来源的数据，由宿主定额组装；循环插件
+只提出模型、工具、询问或完成决策，模型调用与工具执行仍由宿主控制。默认循环是
+`builtin-react`，示例 `builtin-plan-first` 可通过 `agent_loop` 选择。
+
+会话 checkpoint 保存每个插件的 ID、版本、公共 API 版本和配置摘要，并保留循环私有状态。
+恢复时先检查快照，再启动插件或执行节点；缺失、配置变化或未声明兼容的版本变化会报出
+具体插件并保持原 checkpoint。旧 checkpoint 没有插件快照时映射到内置工具、上下文和 ReAct。
+插件声明 `compatible_versions` 可保留旧状态，或用 `migrate_state(old_version, state)` 迁移
+JSON 状态。等待确认的 checkpoint 在下一次正常节点写入迁移结果，避免丢失中断位置；跨进程
+待执行动作仍须重新校验和授权，已完成动作通过执行日志复用。插件只在新会话或恢复前配置，
+不支持运行中热更新。参见 [插件接入](tool-extensions.md#python-插件)。
 
 工具执行经过 `ToolRegistry.execute`，继续使用 Schema、范围和门控检查。
 `agent.tools.runtime.execution_wait` 管理等待、超时和清理；结果、证据与可分页产物由

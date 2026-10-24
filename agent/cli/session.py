@@ -63,9 +63,13 @@ async def run_session(target, settings, batch, is_tty, requested_level, model_ov
     if output_format not in ('markdown', 'json', 'csv'):
         err('报告格式必须为 markdown/json/csv')
         return 2
-    runtime = create_session_runtime(target=target, settings=settings, batch=batch,
-        is_tty=is_tty, model_override=model_override, resume_id=resume_id,
-        session_id=session_id, llm_factory=llm_factory, connection_override=connection_override)
+    try:
+        runtime = create_session_runtime(target=target, settings=settings, batch=batch,
+            is_tty=is_tty, model_override=model_override, resume_id=resume_id,
+            session_id=session_id, llm_factory=llm_factory, connection_override=connection_override)
+    except (ValueError, RuntimeError, OSError, ImportError) as exc:
+        err(f'会话无法打开: {exc}')
+        return 2
     gate, identifier = runtime.gate, runtime.session_id
     read = input_fn or input
     exit_code = 0
@@ -130,7 +134,7 @@ async def run_session(target, settings, batch, is_tty, requested_level, model_ov
             state = await runtime.state()
             if state.get('results') or state.get('events') or state.get('executions') or state.get('pending'):
                 report(state)
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, OSError, ImportError) as exc:
         err(f'会话无法打开: {exc}')
         return 2
     return exit_code

@@ -61,10 +61,63 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self._stack = AsyncExitStack()
         self._lock = asyncio.Lock()
         self._permit = None  # one action, in this process only
+        self._plugin_update = {}
         host = registry.plugin_host
         self.loop = host.loop_provider if host is not None and host.loop_provider is not None else ReactLoop()
         if self.loop.manifest.id != settings.agent_loop:
             raise ValueError(f'Configured agent loop is not available: {settings.agent_loop}')
+
+    def _plugin_snapshot(self):
+        host = self.registry.plugin_host
+        return host.snapshot() if host is not None else []
+
+    def _check_plugin_snapshot(self, values):
+        current = {entry['id']: entry for entry in self._plugin_snapshot()}
+        stored = values.get('plugin_snapshot')
+        if stored is None:
+            # Checkpoints predating plugins had only built-in tools/context/ReAct.
+            legacy = {'builtin-tools', 'builtin-context', 'builtin-react'}
+            if set(current) != legacy or values.get('loop_id', 'builtin-react') != 'builtin-react':
+                raise ValueError('Legacy session uses built-in plugins; restore the default '
+                                 'ReAct plugin configuration before resuming')
+            return {'plugin_snapshot': self._plugin_snapshot()}
+        if not isinstance(stored, list) or not all(isinstance(item, dict) and 'id' in item for item in stored):
+            raise ValueError('Stored plugin snapshot is invalid; session remains paused')
+        old = {item['id']: item for item in stored}
+        if len(old) != len(stored):
+            raise ValueError('Stored plugin snapshot has duplicate IDs; session remains paused')
+        migrated_state = dict(values.get('loop_state') or {})
+        changed = False
+        host = self.registry.plugin_host
+        providers = {provider.manifest.id: provider for provider in host._providers} if host else {}
+        for ident in sorted(set(old) | set(current)):
+            if ident not in current:
+                raise ValueError(f'Session plugin {ident} is missing; re-enable it at its saved version and configuration')
+            if ident not in old:
+                raise ValueError(f'Session plugin {ident} was added after the checkpoint; restore the saved plugin configuration')
+            if old[ident].get('config_digest') != current[ident]['config_digest']:
+                raise ValueError(f'Session plugin {ident} config changed; restore its saved configuration')
+            if old[ident].get('api_version', '').split('.')[0] != current[ident]['api_version'].split('.')[0]:
+                raise ValueError(f'Session plugin {ident} API major changed; install a compatible plugin')
+            if old[ident].get('version') != current[ident]['version']:
+                provider = providers[ident]
+                previous = old[ident].get('version')
+                if previous in getattr(provider, 'compatible_versions', ()):
+                    pass
+                elif callable(getattr(provider, 'migrate_state', None)):
+                    try:
+                        private = provider.migrate_state(previous,
+                            serializable_state(migrated_state.get(ident)))
+                        migrated_state[ident] = serializable_state(private)
+                    except Exception as exc:
+                        raise ValueError(f'Session plugin {ident} migration failed: {exc}') from exc
+                else:
+                    raise ValueError(f'Session plugin {ident} version changed; restore version {previous} '
+                                     'or install a plugin declaring compatibility/migration')
+                changed = True
+        if [item['id'] for item in stored] != [item['id'] for item in self._plugin_snapshot()]:
+            raise ValueError('Session plugin order changed; restore the saved plugin order')
+        return {'plugin_snapshot': self._plugin_snapshot(), 'loop_state': migrated_state} if changed else {}
 
     def _loop_view(self, state):
         # A detached snapshot gives plugins data, never the registry, gate, model or store.
@@ -93,6 +146,10 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         return self._loop_update(state, private) if private is not None else {}
 
     async def _run_node(self, name, state):
+        migrating = bool(self._plugin_update and
+                         state.get('plugin_snapshot') != self._plugin_update.get('plugin_snapshot'))
+        if migrating:
+            state = {**state, **self._plugin_update}
         update = await getattr(self, '_' + name)(state)
         # A node's returned update is checkpointed before the pause interrupt.
         # Emitting here avoids replaying the pause hook when LangGraph resumes it.
@@ -104,7 +161,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                     update = {**update, **self._loop_event_update(current, 'pause', pending)}
                 except Exception as exc:
                     update = {**update, **self._loop_error(exc)}
-        return update
+        return {**self._plugin_update, **update} if migrating else update
 
     def _emit(self, kind, **payload):
         observe(self.on_event, {'kind': kind, **payload})
@@ -138,12 +195,21 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                 stored_loop = snapshot.values.get('loop_id', 'builtin-react')
                 if stored_loop != self.loop.manifest.id:
                     raise ValueError(f'Stored agent loop {stored_loop} differs from configured {self.loop.manifest.id}')
+                plugin_update = self._check_plugin_snapshot(snapshot.values)
             else:
                 if self.require_existing:
                     raise ValueError(f'Session {self.session_id} does not exist')
                 initial = initial_state(self.session_id, self.target, self.system_prompt)
                 initial['loop_id'] = self.loop.manifest.id
+                initial['plugin_snapshot'] = self._plugin_snapshot()
                 await self.graph.aupdate_state(self.config, initial, as_node='decide')
+            if snapshot.values and plugin_update:
+                if snapshot.next:
+                    # LangGraph update_state would discard an interrupted node.
+                    # Carry migration into its next normal checkpoint instead.
+                    self._plugin_update = plugin_update
+                else:
+                    await self.graph.aupdate_state(self.config, plugin_update, as_node='decide')
             self.registry.select_tools(snapshot.values.get('selected_tool_names', []))
             await self._restore_budget()
             if self.registry.plugin_host is not None:
@@ -194,6 +260,8 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self._require_open()
         snapshot = await self.graph.aget_state(self.config)
         values = dict(snapshot.values)
+        if self._plugin_update and values.get('plugin_snapshot') != self._plugin_update.get('plugin_snapshot'):
+            values.update(self._plugin_update)
         usage = await self.store.usage(self.session_id)
         task_usage = await self.store.task_usage(self.session_id, values['task_id'])
         values.update(task_usage or {})
@@ -271,7 +339,8 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                     any(node in snapshot.next for node in ('authorize', 'execute'))):
                 self._permit = None
                 await self.graph.aupdate_state(self.config,
-                    {'route': 'validate', 'pending': None, 'auth_process': ''}, as_node='decide')
+                    {**self._plugin_update, 'route': 'validate', 'pending': None,
+                     'auth_process': ''}, as_node='decide')
                 await self.graph.ainvoke(None, self.config)
             else:
                 await self.graph.ainvoke(Command(resume=value), self.config)
@@ -320,6 +389,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             await self.store.archive_task(self.session_id, current['task_id'], current)
             values = initial_state(self.session_id, self.target, self.system_prompt)
             values['loop_id'] = self.loop.manifest.id
+            values['plugin_snapshot'] = self._plugin_snapshot()
             values.update(selected_tool_names=current.get('selected_tool_names', []),
                 decisions=current['decisions'], actions=current['actions'], steps=current['steps'],
                 segment_decisions=current['decisions'], segment_actions=current['actions'],
