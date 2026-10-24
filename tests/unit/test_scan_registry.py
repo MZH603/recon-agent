@@ -2,10 +2,10 @@ import asyncio
 
 import pytest
 
-from gate.scan_gate import ScanGate
-from tools.runtime.execution_wait import ToolWaiter
-from tools.registry import build_default
-from utils.config import Settings
+from agent.gate.scan_gate import ScanGate
+from agent.tools.runtime.execution_wait import ToolWaiter
+from agent.tools.registry import build_default
+from agent.utils.config import Settings
 
 
 def test_default_registry_builds_builtin_scan_tools(tmp_path):

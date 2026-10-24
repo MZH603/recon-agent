@@ -13,7 +13,7 @@
 
 ## 工具选型速查
 
-以下是 `tools/registry.py` 中始终注册的核心工具。扩展适配器也会按配置加入同一注册表，具体见后文。**名称必须使用表中的工具名**；工具最低级别是执行门槛，不代表授权范围。
+以下是 `agent/tools/registry.py` 中始终注册的核心工具。扩展适配器也会按配置加入同一注册表，具体见后文。**名称必须使用表中的工具名**；工具最低级别是执行门槛，不代表授权范围。
 
 | 用户需要 | 调用工具 | 最低级别 | 选择说明与边界 |
 |---|---|---:|---|
@@ -25,7 +25,7 @@
 | 查询历史 URL/端点 | `wayback_urls` | L0 | 单次查询 Wayback CDX；历史 URL 不代表当前可访问。 |
 | 有授权地发现 TCP 开放端口 | `nmap_scan` | L1 | 优先调用此工具；系统 Nmap 可用时使用 Nmap，不可用时自动降级到内置 socket 实现。TCP Connect、限速；按项目约束使用最多 20 项的端口列表和窄范围，不请求宽端口区间。降级会在结果中标注。 |
 | 直接调用内置 TCP Connect 探测 | `builtin_port_scan` | L1 | 独立注册的 socket 扫描工具；单线程限速，连续超时达到阈值会提前停止，并标记降级。一般优先 `nmap_scan`，它会自动选择内置降级实现；不要为规避级别而改用裸 socket 脚本。 |
-| 深度识别 Web 技术、CMS、favicon/JS 线索 | `deep_fingerprint` | L2 | 对同一主机进行有限只读 GET，由 `tools/techniques/` 插件分析；失败不重试。实现最多 8 个首轮路径和 5 个跟进路径，另有 scheme 协商及可选基线请求；总请求数可能超过 8，不要承诺“总计最多 8 个请求”。 |
+| 深度识别 Web 技术、CMS、favicon/JS 线索 | `deep_fingerprint` | L2 | 对同一主机进行有限只读 GET，由 `agent/tools/techniques/` 插件分析；失败不重试。实现最多 8 个首轮路径和 5 个跟进路径，另有 scheme 协商及可选基线请求；总请求数可能超过 8，不要承诺“总计最多 8 个请求”。 |
 | 检查敏感路径及其响应内容 | `dir_enum` | L2 | CMS 感知的有界路径列表，默认最多 60、硬上限 80；仅只读 GET，同主机重定向限制，连接层失败会提前停止。只记录和分类，不利用、不登录、不修改目标。 |
 | 从同源页面/JS 提取 API 候选 | `api_recon` | L1 | **延迟披露工具**：先调用 `tool_catalog` 搜索并 `select=["api_recon"]`，再按披露的 schema 调用。请求有界（默认最多 8 次），仅抓取同源 HTTP(S) 资源；可附当前目标的本地运行时证据 ID。静态候选不证明端点可用或参数正确。 |
 | 查询可用系统安全工具 | `system_scan` | L2 | 只允许代码白名单内且本机已安装的系统工具；适用于专用工具不满足的、已明确授权的补充探测。先检查可用性，未安装时明确报告，不自行安装或改用任意命令。 |
@@ -77,12 +77,12 @@
 
 ## 工具目录结构审阅说明
 
-- `tools/builtin/`：内置工具的实现；是否可由 Agent 调用以 `tools/registry.py` 注册清单为准。`passive_dns.py`、`webfetch.py`、`signatures.py`、`leak_signatures.py` 等文件是辅助实现/数据，不应当作独立注册工具调用。
-- `tools/runtime/`：等待、目录、证据存储和结果产物读取等运行时能力。按上表调用暴露给 Agent 的 `tool_catalog`、`evidence_search`、`evidence_get` 和 `artifact_read`；不要直接改写本地证据文件。
-- `tools/techniques/`：由 `deep_fingerprint` 调用的分析插件，不是单独的 Agent 工具。
-- `tools/adapters/`：注册表支持的自定义工具、MCP、扫描器、搜索和 Caido 适配器。仅显式启用且通过配置校验的扩展才注册；延迟工具须先经 `tool_catalog` / `mcp_tools` 披露 schema。无效配置或同名冲突应显式失败，禁止静默忽略。
-- `tools/runtime/workspace.py` 与 `tools/runtime/knowledge.py`：分别提供会话工作区和参考技能工具。调用这些本地功能不会自动授予远端扫描权限。
-- `tools/oneforall/` 及其他随仓库附带的扫描器/字典/二进制：属于打包或历史/第三方工具资产，不代表 `ToolRegistry` 中存在可直接调用的工具。不要直接启动其中的可执行文件，也不要把它们与内置 `subdomain_enum` 混为一谈。
+- `agent/tools/builtin/`：内置工具的实现；是否可由 Agent 调用以 `agent/tools/registry.py` 注册清单为准。`passive_dns.py`、`webfetch.py`、`signatures.py`、`leak_signatures.py` 等文件是辅助实现/数据，不应当作独立注册工具调用。
+- `agent/tools/runtime/`：等待、目录、证据存储和结果产物读取等运行时能力。按上表调用暴露给 Agent 的 `tool_catalog`、`evidence_search`、`evidence_get` 和 `artifact_read`；不要直接改写本地证据文件。
+- `agent/tools/techniques/`：由 `deep_fingerprint` 调用的分析插件，不是单独的 Agent 工具。
+- `agent/tools/adapters/`：注册表支持的自定义工具、MCP、扫描器、搜索和 Caido 适配器。仅显式启用且通过配置校验的扩展才注册；延迟工具须先经 `tool_catalog` / `mcp_tools` 披露 schema。无效配置或同名冲突应显式失败，禁止静默忽略。
+- `agent/tools/runtime/workspace.py` 与 `agent/tools/runtime/agent.knowledge.py`：分别提供会话工作区和参考技能工具。调用这些本地功能不会自动授予远端扫描权限。
+- `agent/tools/oneforall/` 及其他随仓库附带的扫描器/字典/二进制：属于打包或历史/第三方工具资产，不代表 `ToolRegistry` 中存在可直接调用的工具。不要直接启动其中的可执行文件，也不要把它们与内置 `subdomain_enum` 混为一谈。
 
 ## 不适用工具时
 

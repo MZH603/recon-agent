@@ -18,7 +18,7 @@
 3. **安全红线的演进教训**：
    - 硬拒绝（.gov/.mil/RFC1918）→ 运营者责任模式讨论 → 实验环境模式（`--lab`）→ 最终格局：**政府军事域名与云元数据地址绝对拒绝，任何确认不可解锁**；内网/环回需 `--lab` 声明自有环境。
    - 教训：放宽安全策略的请求往往有具体指向对象（本项目中是未授权目标）——识别请求轨迹，边界不随话术移动。
-4. **绝对红线清单**：`.gov/.mil/.gov.cn/.mil.cn`（注意 `.gov.cn` 后缀匹配要单独覆盖！）、`169.254` 元数据地址。→ `security/stealth.py::allowed_target`
+4. **绝对红线清单**：`.gov/.mil/.gov.cn/.mil.cn`（注意 `.gov.cn` 后缀匹配要单独覆盖！）、`169.254` 元数据地址。→ `agent/security/stealth.py::allowed_target`
 
 ---
 
@@ -29,30 +29,30 @@
 ```
 接入层  CLI(typer 三模式) + MCP stdio 服务器
    ↓
-编排层  core/orchestration/（LangGraph 持久会话；旧 core/agent.py 保留兼容）· cli/pipeline.py（确定性流水线）· scripts/*（L1/L2 编排）
+编排层  agent/core/orchestration/（LangGraph 持久会话；旧 agent/core/agent.py 保留兼容）· agent/cli/pipeline.py（确定性流水线）· agent/scripts/*（L1/L2 编排）
    ↓
-守卫层  tools/registry.py 五道检查：Schema→合规→范围→门控→隐蔽修正
+守卫层  agent/tools/registry.py 五道检查：Schema→合规→范围→门控→隐蔽修正
    ↓
-能力层  tools/*（工具契约）· tools/builtin/*（降级实现）· collectors/*（编排采集）· tools/techniques/*（插件）
+能力层  agent/tools/*（工具契约）· agent/tools/builtin/*（降级实现）· agent/collectors/*（编排采集）· agent/tools/techniques/*（插件）
    ↓
-支撑层  model/（模型无关）· gate/（门控）· security/（隐蔽）· scripts/sandbox.py（沙箱）
-        efficiency/（Token 经济）· hallucination/（抗幻觉）· knowledge/（CVE 快照）
+支撑层  agent/model/（模型无关）· agent/gate/（门控）· agent/security/（隐蔽）· agent/scripts/sandbox.py（沙箱）
+        agent/efficiency/（Token 经济）· agent/hallucination/（抗幻觉）· agent/knowledge/（CVE 快照）
    ↓
-基座层  platforms/（跨平台）· utils/（配置/日志审计/缓存）· observability/（指标）
-输出层  output/（report/tables/diff/report_builder）
+基座层  agent/platforms/（跨平台）· agent/utils/（配置/日志审计/缓存）· agent/observability/（指标）
+输出层  agent/output/（report/tables/diff/report_builder）
 ```
 
 ### 2.2 关键架构决策（每条都是踩坑后的选择）
 
 | 决策 | 原因 | 文件 |
 |---|---|---|
-| 目录 `platform/` 改名 `platforms/` | 避免遮蔽 Python 标准库 `platform` 模块（rich/pydantic 全崩） | platforms/ |
-| 确定性流水线与 LLM 会话分离 | 会话模型不可达时暂停并允许快照报告/恢复，绝不自动转入流水线扫描 | cli/pipeline.py vs session.py |
-| ReportBuilder 统一渲染 | L0/L2/MCP 任何路径产出的都是同一标准格式（规范即代码） | output/report_builder.py |
-| 工具契约带 evidence/source_hash/confidence/degraded | 抗幻觉的载体在数据结构层，不在提示词层 | tools/base.py |
-| 每个外部工具配 builtin 降级实现 | 降级必须标注 degraded + 置信度下调，"降级不可耻，谎报能力才可耻" | tools/nmap_tool.py → builtin/port_scan.py |
-| DoH/CT 多源降级链 | 单源抖动时其余源补位（crt.sh 挂时 hackertarget 命中 50 条） | tools/builtin/passive_dns.py |
-| 子域清单与指纹队列分离 | 指纹礼貌上限（12 台）不得截断报告清单（77 个）——实跑抓到的真 bug | cli/pipeline.py |
+| 目录 `platform/` 改名 `agent/platforms/` | 避免遮蔽 Python 标准库 `platform` 模块（rich/pydantic 全崩） | agent/platforms/ |
+| 确定性流水线与 LLM 会话分离 | 会话模型不可达时暂停并允许快照报告/恢复，绝不自动转入流水线扫描 | agent/cli/pipeline.py vs session.py |
+| ReportBuilder 统一渲染 | L0/L2/MCP 任何路径产出的都是同一标准格式（规范即代码） | agent/output/report_builder.py |
+| 工具契约带 evidence/source_hash/confidence/degraded | 抗幻觉的载体在数据结构层，不在提示词层 | agent/tools/base.py |
+| 每个外部工具配 builtin 降级实现 | 降级必须标注 degraded + 置信度下调，"降级不可耻，谎报能力才可耻" | agent/tools/nmap_tool.py → builtin/port_scan.py |
+| DoH/CT 多源降级链 | 单源抖动时其余源补位（crt.sh 挂时 hackertarget 命中 50 条） | agent/tools/builtin/passive_dns.py |
+| 子域清单与指纹队列分离 | 指纹礼貌上限（12 台）不得截断报告清单（77 个）——实跑抓到的真 bug | agent/cli/pipeline.py |
 
 ### 2.3 数据契约（跨模块的"宪法"）
 
@@ -77,7 +77,7 @@
 
 ## 第 4 层 · Python 工程技巧（语言级）
 
-1. **pathlib 一切路径**，禁止字符串拼分隔符；平台差异收敛到 `platforms/paths.py`（APPDATA vs XDG）。
+1. **pathlib 一切路径**，禁止字符串拼分隔符；平台差异收敛到 `agent/platforms/paths.py`（APPDATA vs XDG）。
 2. **asyncio.create_subprocess_exec** 替代 os.system/shell=True（跨平台 + 防注入）；超时 `wait_for` + kill + 收敛错误码。
 3. **asyncio.to_thread** 包装同步阻塞调用（urllib/socket/DNS）；Windows Proactor 不支持 `connect_read_pipe` → stdin 用 `asyncio.to_thread(sys.stdin.readline)`。
 4. **信号量限速器**：`Semaphore(concurrency) + random.uniform(delay)` 的 asynccontextmanager —— 限速从"承诺"变成可测量的耗时下界。
@@ -108,14 +108,14 @@
 | DNS 字典验证 | 600 词内置字典 + 并发 10 + 4s 超时，只查公共解析器 | 不触碰目标，HARD 有界 |
 | 存活解析 | getaddrinfo 逐主机 | 精准扫描的前置过滤 |
 
-实测命中分布（example.com）：HackerTarget 50 / 字典 33 / urlscan 6 / SAN 2——**多源冗余是抗抖动的关键**（CT 挂时其他源补位）。→ tools/subdomain_enum.py, tools/builtin/passive_dns.py
+实测命中分布（example.com）：HackerTarget 50 / 字典 33 / urlscan 6 / SAN 2——**多源冗余是抗抖动的关键**（CT 挂时其他源补位）。→ agent/tools/subdomain_enum.py, agent/tools/builtin/passive_dns.py
 
 ### 5.2 Web 指纹识别（对标 WhatWeb/Wappalyzer）
 
 - **三级特征源**：HTTP Header（Server/X-Powered-By/Set-Cookie/自定义头）→ meta generator → 页面 body 特征（路径/Cookie/DOM）。
-- **签名库分层**：服务器/中间件/语言/框架/CMS/前端/JS库/WAF/CDN/系统（国内教务正方·强智·青果、OA 致远·泛微·蓝凌·通达、超星、宝塔、UEditor…）→ tools/builtin/signatures.py
+- **签名库分层**：服务器/中间件/语言/框架/CMS/前端/JS库/WAF/CDN/系统（国内教务正方·强智·青果、OA 致远·泛微·蓝凌·通达、超星、宝塔、UEditor…）→ agent/tools/builtin/signatures.py
 - **版本提取**：`SCRIPT_VERSION_RE` 从 script src 抓精确版本（jquery-3.6.0）；Header `nginx/1.24.0`；generator meta。
-- **WhatWeb 式插件架构**：`tools/techniques/` —— Technique 基类（声明 paths + analyze）+ `@register` 注册表，引擎零改动扩展：
+- **WhatWeb 式插件架构**：`agent/tools/techniques/` —— Technique 基类（声明 paths + analyze）+ `@register` 注册表，引擎零改动扩展：
   - error_page：随机 404 页暴露 Tomcat/Spring/IIS/Nginx/WebSphere（绕过 Server 头伪装）
   - cms_paths：/wp-login.php、/wp-json/（REST namespaces）、/administrator/、/user/login
   - favicon：md5 跨主机同值 = 同源部署（无哈希库也能做部署聚类）
@@ -128,39 +128,39 @@
 - 仅 TCP Connect（禁 SYN/UDP/异常 flags），单线程，每次尝试前 3-10s 随机延迟；
 - **失败即停**：ConnectionRefused = 答案（closed，继续）；Timeout = 失败（立即停止该目标，不重试）——对防火墙丢弃型目标会漏后置端口，这是隐蔽性的有意权衡，报告如实标注 `stopped_early`；
 - nmap 缺失 → builtin socket 降级（注意跨 Schema 参数转换）；
-- **限速可测**：扫描耗时 ≥ 尝试次数 × 3s（QA 用计时断言验证）。→ tools/builtin/port_scan.py
+- **限速可测**：扫描耗时 ≥ 尝试次数 × 3s（QA 用计时断言验证）。→ agent/tools/builtin/port_scan.py
 
 ### 5.4 敏感路径枚举
 
-有界字典（内置 40 条 + 自定义，合并上限 60，HARD 防爆破）；200/401/403 记录为发现，404 跳过；连接失败即停。→ tools/dir_enum.py
+有界字典（内置 40 条 + 自定义，合并上限 60，HARD 防爆破）；200/401/403 记录为发现，404 跳过；连接失败即停。→ agent/tools/dir_enum.py
 
 ### 5.5 其他采集面
 
-- **DNS 记录**：DoH 多解析器链（dns.google → dns.alidns.com，国内网络必备）+ socket 兜底降级。→ tools/builtin/dns_query.py
+- **DNS 记录**：DoH 多解析器链（dns.google → dns.alidns.com，国内网络必备）+ socket 兜底降级。→ agent/tools/builtin/dns_query.py
 - **WHOIS**：socket 43 端口两级查询（IANA → referral）；**`.edu.cn` 不在 CNNIC 而归 CERNET（whois.edu.cn）**——注册局特例要专门处理。
-- **子域接管**：CNAME 指向第三方托管 + "未部署"特征页（GitHub Pages/S3/Azure/Netlify… 11 家签名）。→ tools/takeover_check.py
-- **Wayback CDX**：`web.archive.org/cdx/search/cdx?url=*.domain&output=json&collapse=urlkey` 挖历史端点。→ tools/wayback_urls.py
+- **子域接管**：CNAME 指向第三方托管 + "未部署"特征页（GitHub Pages/S3/Azure/Netlify… 11 家签名）。→ agent/tools/takeover_check.py
+- **Wayback CDX**：`web.archive.org/cdx/search/cdx?url=*.domain&output=json&collapse=urlkey` 挖历史端点。→ agent/tools/wayback_urls.py
 
 ---
 
 ## 第 6 层 · Agent 开发核心模式（七大战法）
 
-1. **LangGraph 持久会话**：decide→validate→authorize→execute→evaluate；interrupt 保存待确认，SQLite checkpoint + 独立 usage/execution journal；有界决策/动作/步骤，校验失败回填 ≤2 次。→ core/orchestration/
-2. **模型无关三层**：抽象接口（LLMProvider）→ LiteLLM 适配归一化 → fallback 链；惰性初始化让会话启动零调用；配置/模型失败暂停而非自动扫描。→ model/
+1. **LangGraph 持久会话**：decide→validate→authorize→execute→evaluate；interrupt 保存待确认，SQLite checkpoint + 独立 usage/execution journal；有界决策/动作/步骤，校验失败回填 ≤2 次。→ agent/core/orchestration/
+2. **模型无关三层**：抽象接口（LLMProvider）→ LiteLLM 适配归一化 → fallback 链；惰性初始化让会话启动零调用；配置/模型失败暂停而非自动扫描。→ agent/model/
 3. **协议双轨**：原生 Tool Use 优先 + XML 协议兜底（`parse_xml_tool_calls`），无原生能力的模型/端点也能用。
-4. **上下文 Token 经济**：大输出落盘留指针（>1500 tokens）、模板化压缩（nmap/httpx 固定格式只注入变量）、精确哈希去重（hash(目标+工具+参数)）、上下文 70% 触发裁剪。→ core/context.py, efficiency/
-5. **预算三档**：60% 停 L2 / 80% 只被动 / 100% 断 LLM + `[INCOMPLETE]` 水印。→ efficiency/budget_guard.py
-6. **MCP 外挂化**：把工具包成 MCP 服务器 = 给所有主流 Agent（Claude/ZCode）开放"可发现的 API"；**安全约束不随接入方式放松**（L2 永禁、L1 需启动参数、范围硬校验）。→ server/
+4. **上下文 Token 经济**：大输出落盘留指针（>1500 tokens）、模板化压缩（nmap/httpx 固定格式只注入变量）、精确哈希去重（hash(目标+工具+参数)）、上下文 70% 触发裁剪。→ agent/core/context.py, agent/efficiency/
+5. **预算三档**：60% 停 L2 / 80% 只被动 / 100% 断 LLM + `[INCOMPLETE]` 水印。→ agent/efficiency/budget_guard.py
+6. **MCP 外挂化**：把工具包成 MCP 服务器 = 给所有主流 Agent（Claude/ZCode）开放"可发现的 API"；**安全约束不随接入方式放松**（L2 永禁、L1 需启动参数、范围硬校验）。→ agent/server/
 7. **确定性流水线 + 受控 LLM 编排**：默认采集不依赖模型；会话中模型提出工具/计划，代码层决定是否允许执行。模型输出与原始工具文本均为不可信输入，摘要不是验证发现。
 
 ---
 
 ## 第 7 层 · 安全工程模式（红队工具的特殊性）
 
-1. **门控设计**：三次独立确认内容必须互不相同（`CONFIRM 2` → 目标精确串 → 责任声明）；通用词（y/yes/确认）一律无效；签名文件（SHA256+时间戳+操作者指纹）仅当次会话有效；`abort` 不可撤销。→ gate/scan_gate.py
+1. **门控设计**：三次独立确认内容必须互不相同（`CONFIRM 2` → 目标精确串 → 责任声明）；通用词（y/yes/确认）一律无效；签名文件（SHA256+时间戳+操作者指纹）仅当次会话有效；`abort` 不可撤销。→ agent/gate/scan_gate.py
 2. **代码兜底 > Prompt 约束**：enforce_stealth 静默修正 LLM 的越权参数；注册表五道检查任何路径不可绕过（含 MCP 外部 Agent）。
-3. **沙箱三层**：AST 黑名单（禁 os/subprocess/eval/文件写）→ Bandit（防 AST 混淆绕过）→ 运行时隔离（Docker 断网，缺则降级直跑+告知）；任一层失败即拒。→ scripts/sandbox.py
-4. **审计哈希链**：每条记录 `prev + hash` 链式哈希，`verify_audit_chain` 可检出篡改/删除；**写入前实时读文件尾**（不用进程内缓存——多进程/测试交错是真实断裂源）。→ utils/logger.py
+3. **沙箱三层**：AST 黑名单（禁 os/subprocess/eval/文件写）→ Bandit（防 AST 混淆绕过）→ 运行时隔离（Docker 断网，缺则降级直跑+告知）；任一层失败即拒。→ agent/scripts/sandbox.py
+4. **审计哈希链**：每条记录 `prev + hash` 链式哈希，`verify_audit_chain` 可检出篡改/删除；**写入前实时读文件尾**（不用进程内缓存——多进程/测试交错是真实断裂源）。→ agent/utils/logger.py
 5. **测试与生产隔离**：conftest autouse fixture 强制测试审计走 tmp_path——生产日志只由真实作业写入（QA 实测抓到的缺陷）。
 6. **日志轮转**：链断裂/污染后轮转存档（保留证据）+ 新链起链。
 7. **合规人文面**：授权场景要求具体（谁授权/范围/时间窗）；报告区分"已验证事实"与"未验证假设"；测试目标选官方授权主机（scanme.nmap.org）或自有靶场。
@@ -169,7 +169,7 @@
 
 ## 第 8 层 · 报告与交付规范
 
-1. **标准格式**（output/report.py + tables.py + report_builder.py）：
+1. **标准格式**（agent/output/report.py + tables.py + report_builder.py）：
    1 执行摘要 → **2 子域名清单（全量表）** → **3 存活资产总表**（标题/端口/中间件/CMS/框架/前端/WAF/置信度）→ 4 技术栈明细（来源+版本）+ 风险路径子表 → 5 Mermaid 拓扑图 → CVE 关联 → 6 存疑 → 7 降级 → 8 建议 → 9 引用。
 2. **诚实规则**：未检出 ≠ 不存在（如实标注）；存活但指纹失败的资产照样成行（`—` 填充不省略）；端口列 L0 推断值标注，L1 扫描后回填真实值；假设与事实分列。
 3. **水印体系**：`[INCOMPLETE]` 预算耗尽 / `[降级模式]` 存在降级项 / `[未授权模式]`——构建器从数据自动推导，不依赖调用方。
@@ -195,7 +195,7 @@
 
 | # | 症状 | 根因 | 修法 | 教训 |
 |---|---|---|---|---|
-| 1 | rich/pydantic 全崩 | 目录 `platform/` 遮蔽标准库 | 改名 `platforms/` | 包命名先查标准库冲突 |
+| 1 | rich/pydantic 全崩 | 目录 `platform/` 遮蔽标准库 | 改名 `agent/platforms/` | 包命名先查标准库冲突 |
 | 2 | OneForAll 启动即崩 | Py3.12+ 移除 distutils | setuptools 垫片 | 老代码跑新解释器先查移除项 |
 | 3 | OneForAll 解析静默失败 | dnspython 版本漂移 | 钉回 2.2.1 | 依赖漂移是隐形炸弹 |
 | 4 | 指纹漏 Server 头 | dict(headers) 重复键取第一个 | fixture 用 server_version 属性 | 集成测试抓单测盲区 |
@@ -241,20 +241,20 @@
 
 | 想学什么 | 去看 |
 |---|---|
-| Agent 循环 | core/agent.py |
-| 门控/确认码/签名 | gate/scan_gate.py；MCP 拒绝流程见 tests/e2e/test_mcp.py |
-| 限速器与参数修正 | security/stealth.py |
-| 沙箱三层 | scripts/sandbox.py |
-| 模型归一化/fallback | model/litellm_adapter.py, model/registry.py |
-| 工具契约与守卫链 | tools/base.py, tools/registry.py |
-| 子域枚举 8 源 | tools/subdomain_enum.py, tools/builtin/passive_dns.py |
-| 指纹签名表 | tools/builtin/signatures.py |
-| WhatWeb 插件架构 | tools/techniques/ + tools/deep_fingerprint.py |
-| MCP 服务器 | server/mcp_server.py, server/tools_bridge.py |
-| 统一报告构建 | output/report_builder.py, output/tables.py, output/report.py |
-| 审计哈希链 | utils/logger.py；审计落盘流程见 tests/e2e/test_mcp.py |
-| 预算/裁剪/去重 | efficiency/ |
-| QA-in-Scan | scripts/l1_scan.py, scripts/aggressive_l2.py |
+| Agent 循环 | agent/core/agent.py |
+| 门控/确认码/签名 | agent/gate/scan_gate.py；MCP 拒绝流程见 tests/e2e/test_mcp.py |
+| 限速器与参数修正 | agent/security/stealth.py |
+| 沙箱三层 | agent/scripts/sandbox.py |
+| 模型归一化/fallback | agent/model/litellm_adapter.py, agent/model/registry.py |
+| 工具契约与守卫链 | agent/tools/base.py, agent/tools/registry.py |
+| 子域枚举 8 源 | agent/tools/subdomain_enum.py, agent/tools/builtin/passive_dns.py |
+| 指纹签名表 | agent/tools/builtin/signatures.py |
+| WhatWeb 插件架构 | agent/tools/techniques/ + agent/tools/deep_fingerprint.py |
+| MCP 服务器 | agent/server/mcp_server.py, agent/server/tools_bridge.py |
+| 统一报告构建 | agent/output/report_builder.py, agent/output/tables.py, agent/output/report.py |
+| 审计哈希链 | agent/utils/logger.py；审计落盘流程见 tests/e2e/test_mcp.py |
+| 预算/裁剪/去重 | agent/efficiency/ |
+| QA-in-Scan | agent/scripts/l1_scan.py, agent/scripts/aggressive_l2.py |
 | 实战报告范例 | reports/（L0/L1/L2/红队/对照 ×5 份） |
 
 ---

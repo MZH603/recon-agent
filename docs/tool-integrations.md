@@ -6,7 +6,7 @@
 
 ## 启动
 
-裸启动或 `python -m cli.main --auth` 后，可以直接确认基础配置并进入会话，也可以展开“扩展工具（可选）”。页面默认展示现有配置中的扩展；没有配置时展示全部关闭的示例。用 Space/Enter 勾选需要的命令、脚本、HTTP 工具或 MCP；也可填写自己的 YAML 路径，选择“加载工具列表”后再勾选。修改路径后需要重新加载，避免提交旧列表。
+裸启动或 `python -m agent.cli.main --auth` 后，可以直接确认基础配置并进入会话，也可以展开“扩展工具（可选）”。页面默认展示现有配置中的扩展；没有配置时展示全部关闭的示例。用 Space/Enter 勾选需要的命令、脚本、HTTP 工具或 MCP；也可填写自己的 YAML 路径，选择“加载工具列表”后再勾选。修改路径后需要重新加载，避免提交旧列表。
 
 列表显示程序/入口脚本是否存在以及最低执行级别。勾选只注册本次会话可使用的扩展，不安装依赖，也不执行任何工具。浏览器 MCP 仍需先准备服务与浏览器并在 YAML 中填写入口路径。基础内置工具，包括 `api_recon` 和证据查询，始终可用；是否能执行还受原有级别门控限制。
 
@@ -16,12 +16,12 @@
 
 ```powershell
 # 不需要目标、模型、网络或外部服务：查看内置工具和已配置的扩展
-python -m cli.main --list-tools
-python -m cli.main --tools-config tools/data/tool-integrations.example.yaml --list-tools
+python -m agent.cli.main --list-tools
+python -m agent.cli.main --tools-config agent/tools/data/tool-integrations.example.yaml --list-tools
 
 # 编辑一份配置，启用需要的工具，然后进入会话
-Copy-Item tools/data/tool-integrations.example.yaml tools.local.yaml
-python -m cli.main --session -t example.com --authorized --tools-config tools.local.yaml
+Copy-Item agent/tools/data/tool-integrations.example.yaml tools.local.yaml
+python -m agent.cli.main --session -t example.com --authorized --tools-config tools.local.yaml
 ```
 
 也可把 `custom_tools`、`mcp_servers` 放在现有 `config.yaml`。`--tools-config` 只接收工具相关字段，不能用它改变扫描门控。该文件中出现的工具列表替换相应的主配置列表。没有扩展配置时不启动任何外部进程或 MCP 服务。
@@ -49,7 +49,7 @@ python -m cli.main --session -t example.com --authorized --tools-config tools.lo
 
 每个服务必须设置 `allowed_tools`；空列表不允许调用任何远程工具。每个允许的工具都必须有 `target_fields` 映射，例如 `browser_navigate: [url]`。这些参数作为 URL/主机校验，不得超出当前授权范围。经人工检查、只读取当前页面状态的工具可以明确写 `browser_snapshot: []`；缺少映射会拒绝配置。避免把执行代码、任意文件访问、表单提交工具加入浏览器允许列表。
 
-浏览器示例使用已安装的 Playwright MCP 的 `cli.js`，由 `node` 启动；先按其[官方说明](https://github.com/microsoft/playwright-mcp)准备服务和浏览器，再填写实际路径，启用 `browser` 配置。本项目不会自动安装 npm 包、下载浏览器或启动扫描。浏览器的 `--headless`、`--isolated` 参数见官方说明。
+浏览器示例使用已安装的 Playwright MCP 的 `agent.cli.js`，由 `node` 启动；先按其[官方说明](https://github.com/microsoft/playwright-mcp)准备服务和浏览器，再填写实际路径，启用 `browser` 配置。本项目不会自动安装 npm 包、下载浏览器或启动扫描。浏览器的 `--headless`、`--isolated` 参数见官方说明。
 
 远程工具是操作者配置的可信连接器。本项目检查调用参数和授权目标，但外部程序内部请求、浏览器页面资源及重定向需要操作者额外限制；这些适配器不能充当操作系统或网络沙箱。一次浏览器连接只绑定一个授权目标，改变目标需要新会话。
 

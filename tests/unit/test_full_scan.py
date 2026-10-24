@@ -2,7 +2,7 @@
 import asyncio
 import json
 
-from scripts.full_scan import load_state, make_cascade_gate, save_state
+from agent.scripts.full_scan import load_state, make_cascade_gate, save_state
 
 
 def test_cascade_gate_level1_is_immediately_active():
@@ -25,7 +25,7 @@ def test_cascade_gate_level2_requires_unlock():
 
 def test_load_state_per_target_file(tmp_path, monkeypatch):
     """状态按目标分文件存储（HARD：消除跨目标污染）。"""
-    import scripts.full_scan as fs
+    import agent.scripts.full_scan as fs
 
     state_path = tmp_path / "reports" / "scan_state_example_com.json"
     monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
@@ -42,7 +42,7 @@ def test_load_state_per_target_file(tmp_path, monkeypatch):
 
 
 def test_load_state_does_not_mark_failed_l2_items_complete(tmp_path, monkeypatch):
-    import scripts.full_scan as fs
+    import agent.scripts.full_scan as fs
 
     state_path = tmp_path / "reports" / "scan_state_example_com.json"
     monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
@@ -68,7 +68,7 @@ def test_load_state_does_not_mark_failed_l2_items_complete(tmp_path, monkeypatch
 
 def test_save_state_merge_semantics(tmp_path, monkeypatch):
     """save_state 读-改-写合并（HARD：不覆盖既有键——历史数据丢失均源于全量覆盖写）。"""
-    import scripts.full_scan as fs
+    import agent.scripts.full_scan as fs
 
     state_path = tmp_path / "reports" / "scan_state_example_com.json"
     monkeypatch.setattr(fs, "_state_path", lambda _t: state_path)
@@ -84,9 +84,9 @@ def test_save_state_merge_semantics(tmp_path, monkeypatch):
 
 
 def test_l0_failure_stops_instead_of_falling_back_to_root():
-    from model.base import NormalizedToolCall
-    from scripts.full_scan import stage_l0
-    from tools.base import ToolResult
+    from agent.model.base import NormalizedToolCall
+    from agent.scripts.full_scan import stage_l0
+    from agent.tools.base import ToolResult
 
     class FailedRegistry:
         async def execute(self, call: NormalizedToolCall):
@@ -98,9 +98,9 @@ def test_l0_failure_stops_instead_of_falling_back_to_root():
 
 
 def test_l2_abort_stops_remaining_hosts(tmp_path, monkeypatch):
-    import scripts.full_scan as fs
-    from scripts.full_scan import stage_l2
-    from tools.base import ToolResult
+    import agent.scripts.full_scan as fs
+    from agent.scripts.full_scan import stage_l2
+    from agent.tools.base import ToolResult
 
     class Gate:
         level = 2

@@ -1,5 +1,45 @@
 # 扩展工具接入
 
+## Python 插件
+
+交互会话可扩展三类受版本约束的进程内插件：`ToolProvider` 注册现有 `BaseTool`，
+`ContextProvider` 提供带 `id/source/trust/priority` 的 `ContextBlock`，`AgentLoop`
+通过 `ModelTurn`、`ToolBatch`、`AskUser`、`Continue`、`Complete` 提出下一步。
+公共接口从 `agent.plugins` 导入；内置示例见 `agent/plugins/builtin_tools.py`、
+`builtin_context.py`、`react_loop.py` 和 `example_plan_loop.py`。
+插件清单 `PluginManifest` 必须提供稳定 `id`、`version`、`api_version='1.0'`、
+`capabilities`，可声明 Pydantic `config_model` 和 `dependencies`。工具插件还须用
+`describe_tool_names(config)` 预声明工具名；循环插件须实现 `prepare/on_response/on_result/on_event`。
+
+先用 Python 包安装可信插件，再在 `config.yaml` 或 `--tools-config` 指定的 YAML 中**显式启用**：
+
+```yaml
+plugins:
+  - id: my-context
+    entry_point: my-context
+    config:
+      source: notes
+# 本地模块改用 module: my_package.plugin；单个 .py 文件改用 path: /absolute/plugin.py
+```
+
+已安装包在 `pyproject.toml` 中用 `[project.entry-points."recon_agent.plugins"]` 声明
+`my-context = "my_package.plugin:plugin"`；入口可为插件对象或无参数构造类。
+`--tools-config` 只允许插件等扩展键，不允许改变门控参数；要切换循环，在主 `config.yaml`
+设置 `agent_loop: builtin-plan-first`。仅安装包不会自动启用入口；宿主也不会扫描当前工作目录的 Python 文件。
+装载前会校验配置模型、依赖、能力和重名工具。`register` 只声明能力，不应启动网络请求
+或后台任务；会话进入时调用 `start`，退出时逆序、幂等调用 `close`。
+
+恢复会话时，每个插件的 ID、版本、API 主版本和配置摘要必须与 checkpoint 相符。
+若升级只改变实现且旧状态兼容，插件可声明 `compatible_versions = ('1.0',)`；
+若需转换私有 JSON 状态，可实现 `migrate_state(old_version, state) -> dict`。
+迁移失败、插件缺失或配置变化会阻止恢复，并在 CLI/TUI 提示具体插件；请恢复原安装和
+配置，或先用旧版本处理等待确认的动作。旧版无插件快照的会话使用内置 ReAct 映射。
+
+进程内 Python 插件与宿主共享操作系统权限，须由操作者信任后明确启用；宿主守卫保证的是
+正式工具调用路径，不能把任意 Python 插件当作沙箱。外部进程可经现有 MCP 接入并由操作者
+限制其权限；MCP 工具不能替换宿主授权、checkpoint 或循环。现阶段没有插件安装器、运行中
+热重载、UI 插件或多 Agent 调度。
+
 本项目提供受控扫描器、搜索、代理只读查询、按需知识加载和工作记录，使用原生 `BaseTool` / `ToolResult` 接口。工具经过目标范围、合规、L1/L2 门控、执行日志和证据保存。通用 Shell、多 Agent 调度和整套外部 Agent 运行时不在接入范围。
 
 ## 已实现能力
@@ -25,9 +65,9 @@ nmap、httpx、API 静态采集和浏览器 MCP 复用现有实现，不引入�
 在仓库根目录执行：
 
 ```powershell
-Copy-Item tools/data/tool-integrations.example.yaml tools.local.yaml
-python -m cli.main --tools-config tools.local.yaml --list-tools
-python -m cli.main --session -t example.com --authorized --tools-config tools.local.yaml
+Copy-Item agent/tools/data/tool-integrations.example.yaml tools.local.yaml
+python -m agent.cli.main --tools-config tools.local.yaml --list-tools
+python -m agent.cli.main --session -t example.com --authorized --tools-config tools.local.yaml
 ```
 
 编辑 `tools.local.yaml`，填入本机真实程序路径，启用需要的条目。裸启动/`--auth` 的扩展工具列表也支持勾选这些条目。选择只影响本次会话，不安装工具或执行请求。

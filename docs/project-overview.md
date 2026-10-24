@@ -28,27 +28,27 @@ recon-agent 是一个**跨平台（Windows/Linux）命令行 AI Agent**，用于
 
 | # | 铁律 | 代码落点 |
 |---|---|---|
-| 1 | **隐蔽性与目标可用性绝对第一**：并发≤2（默认1）、L1/L2 请求间隔随机 3-10s、仅 TCP Connect、浏览器 UA 伪装、失败立即停止不重试 | `security/stealth.py`（enforce_stealth/StealthRateLimiter） |
-| 2 | **授权前提**：仅处理 `--authorized` / `--authorized-for` 声明范围内的目标；内网/环回地址默认拒绝（`--lab` 可声明自有实验环境解锁）。绝对红线（任何模式不可越过）：`.gov/.mil/.gov.cn/.mil.cn` 与 `169.254` 元数据地址 | `security/stealth.py::allowed_target` |
-| 3 | **被动优先、分级递进**：L0 受控采集（指纹/SAN 等可接触远端；会话启动不自动执行）→ L1 隐蔽主动（一次确认）→ L2 激进但隐蔽（三次独立确认+签名文件+逐项确认） | `gate/scan_gate.py` |
-| 4 | **范围不越界**：关联资产仅记录为"范围外候选"，任何级别下代码层硬拦截，不依赖 Prompt | `tools/registry.py`、`security/stealth.py::is_in_scope` |
-| 5 | **不编造**：CVE/版本/CMS 必须来自工具真实返回；无证据标 `[未确认]`；多源冲突标 `[冲突，需人工核实]` 禁止二选一；CVE 未收录硬输出 | `hallucination/`、`knowledge/cve_base.py` |
-| 6 | **LLM 输出永远是不可信输入**：参数/脚本/建议必须经代码层校验 | `tools/registry.py` 五道守卫、`scripts/sandbox.py` |
-| 7 | **跨平台一致**：pathlib、无 shell 子进程、跨平台工具发现 | `platforms/` |
-| 8 | **模型无关**：业务代码不 import 任何模型 SDK，统一走 `model/` 适配层 | `model/` |
-| 9 | **可审计**：门控、拦截、修正、主动操作全量落盘 | `utils/logger.py::audit` → `%APPDATA%/recon-agent/audit.log` |
+| 1 | **隐蔽性与目标可用性绝对第一**：并发≤2（默认1）、L1/L2 请求间隔随机 3-10s、仅 TCP Connect、浏览器 UA 伪装、失败立即停止不重试 | `agent/security/stealth.py`（enforce_stealth/StealthRateLimiter） |
+| 2 | **授权前提**：仅处理 `--authorized` / `--authorized-for` 声明范围内的目标；内网/环回地址默认拒绝（`--lab` 可声明自有实验环境解锁）。绝对红线（任何模式不可越过）：`.gov/.mil/.gov.cn/.mil.cn` 与 `169.254` 元数据地址 | `agent/security/stealth.py::allowed_target` |
+| 3 | **被动优先、分级递进**：L0 受控采集（指纹/SAN 等可接触远端；会话启动不自动执行）→ L1 隐蔽主动（一次确认）→ L2 激进但隐蔽（三次独立确认+签名文件+逐项确认） | `agent/gate/scan_gate.py` |
+| 4 | **范围不越界**：关联资产仅记录为"范围外候选"，任何级别下代码层硬拦截，不依赖 Prompt | `agent/tools/registry.py`、`agent/security/stealth.py::is_in_scope` |
+| 5 | **不编造**：CVE/版本/CMS 必须来自工具真实返回；无证据标 `[未确认]`；多源冲突标 `[冲突，需人工核实]` 禁止二选一；CVE 未收录硬输出 | `agent/hallucination/`、`agent/knowledge/cve_base.py` |
+| 6 | **LLM 输出永远是不可信输入**：参数/脚本/建议必须经代码层校验 | `agent/tools/registry.py` 五道守卫、`agent/scripts/sandbox.py` |
+| 7 | **跨平台一致**：pathlib、无 shell 子进程、跨平台工具发现 | `agent/platforms/` |
+| 8 | **模型无关**：业务代码不 import 任何模型 SDK，统一走 `agent/model/` 适配层 | `agent/model/` |
+| 9 | **可审计**：门控、拦截、修正、主动操作全量落盘 | `agent/utils/logger.py::audit` → `%APPDATA%/recon-agent/audit.log` |
 
 ---
 
 ## 3. 系统架构
 
 ```text
-CLI --session → idle REPL → core/orchestration/SessionRuntime
+CLI --session → idle REPL → agent/core/orchestration/SessionRuntime
    decide → validate → authorize (durable interrupt) → execute → evaluate
    ask_user / update_plan; completion marker <task_complete/>; bounded decisions/actions/steps
    SQLite checkpoint + usage journal + execution journal (uncertain/completed)
    dynamic ToolRegistry (12 tools) → Schema/合规/范围/门控/预算 → evidence
-   output/session_report.py → ReportBuilder/ReconData → MD/JSON/CSV
+   agent/output/session_report.py → ReportBuilder/ReconData → MD/JSON/CSV
 CLI default/cascade → 原确定性 pipeline/scripts
 MCP → 原 stdio tool bridge，L2 永久禁止
 ```
@@ -57,7 +57,7 @@ MCP → 原 stdio tool bridge，L2 永久禁止
 - **流水线模式**（默认）：确定性 L0 采集，无模型依赖，离线可出报告；
 - **会话模式**（--session）：LangGraph 持久交互会话；启动空闲零调用，操作员任务才触发模型。模型不可用暂停，可报告/恢复，不自动转入流水线；
 - **MCP 模式**（--mcp）：被 Claude/ZCode 等外部 Agent 调用，L2 永久禁止、L1 需 `--allow-l1` 显式放行。
-- **级联模式**（--level N，新增）：请求 N 级自动包含全部低等级——L0→L1→L2 逐级数据回流，深度指纹/端口面增量落盘可续跑（scripts/full_scan.py）。
+- **级联模式**（--level N，新增）：请求 N 级自动包含全部低等级——L0→L1→L2 逐级数据回流，深度指纹/端口面增量落盘可续跑（agent/scripts/full_scan.py）。
 
 ---
 
@@ -65,24 +65,24 @@ MCP → 原 stdio tool bridge，L2 永久禁止
 
 | 包 | 职责 | 关键文件 |
 |---|---|---|
-| `platforms/` | 跨平台路径/子进程/工具发现（**文档原定 platform/ 因遮蔽标准库更名**） | paths / subprocess / tools |
-| `utils/` | 配置常量（Settings，HARD 集中）、Rich 日志+审计、SQLite 缓存 | config / logger / cache |
-| `security/` | 隐蔽性强制：参数修正、合规名单、范围锁定、限速器 | stealth.py |
-| `gate/` | 三级门控：L1 一次确认、L2 三级确认码+签名文件+逐项确认、abort | scan_gate.py |
-| `scripts/` | 脚本沙箱：AST 黑名单 + Bandit + 运行时隔离（Docker 可选） | sandbox.py |
-| `model/` | LLM 抽象、LiteLLM 适配归一化、fallback 路由 | base / litellm_adapter / registry |
-| `tools/` | 工具契约（ToolResult+evidence+source_hash）、五道守卫注册表、nmap/httpx 适配器、**subdomain_enum（子域枚举+递归拓线）**、**L2 工具（dir_enum / script_probe）** | base / registry / nmap_tool / httpx_tool / dir_enum / script_probe |
-| `tools/builtin/` | 降级实现：socket 端口扫描、DoH+socket DNS、Header/meta 指纹 | port_scan / dns_query / fingerprint |
-| `collectors/` | 被动资产拓线（CRT.sh/WHOIS/IP/C段）、技术栈卡片编排 | asset_expander / web_fingerprint |
-| `knowledge/` | CVE 签名快照（SHA256 防投毒）+ 否定证据检索 | cve_base / snapshot |
-| `efficiency/` | 提效减耗：上下文裁剪、精确哈希去重、增量更新、模板压缩、预算三档 | 5 个模块 |
-| `hallucination/` | 抗幻觉：证据绑定、矛盾检测、输出一致性校验 | evidence / contradiction / consistency |
-| `observability/` | 核心指标（10 核心 + 辅助），隐蔽违规/门控绕过恒应 0 | metrics.py |
-| `output/` | 报告渲染（标准结构 + 水印）+ 三格式落盘 + 统一构建器（ReportBuilder）+ 增量对比 + 表格渲染 | report / report_builder / tables / diff |
-| `scripts/` | 授权编排：级联扫描（full_scan）/全资产深度（fleet_l2）/定向（aggressive_l2）/L1 QA（l1_scan）/端口填表（fill_l1_scan）/门控演示（demo_l2）/泄露嗅探签名（leak_signatures）/WhatWeb 插件（techniques）/沙箱（sandbox） | full_scan / fleet_l2 / aggressive_l2 / l1_scan / fill_l1_scan / demo_l2 / sandbox / leak_signatures / techniques |
-| `core/` | LangGraph 会话节点、SQLite 持久化/独立执行日志、模型桥；旧循环保留兼容 | orchestration / llm / agent / context |
-| `cli/` | Typer 入口（三模式）、L0 流水线、会话 REPL | main / pipeline / session |
-| `server/` | **V1.0 新增**：MCP stdio 服务器（零依赖 JSON-RPC 2.0）+ 工具桥 | mcp_server / tools_bridge |
+| `agent/platforms/` | 跨平台路径/子进程/工具发现（**文档原定 platform/ 因遮蔽标准库更名**） | paths / subprocess / tools |
+| `agent/utils/` | 配置常量（Settings，HARD 集中）、Rich 日志+审计、SQLite 缓存 | config / logger / cache |
+| `agent/security/` | 隐蔽性强制：参数修正、合规名单、范围锁定、限速器 | stealth.py |
+| `agent/gate/` | 三级门控：L1 一次确认、L2 三级确认码+签名文件+逐项确认、abort | scan_gate.py |
+| `agent/scripts/` | 脚本沙箱：AST 黑名单 + Bandit + 运行时隔离（Docker 可选） | sandbox.py |
+| `agent/model/` | LLM 抽象、LiteLLM 适配归一化、fallback 路由 | base / litellm_adapter / registry |
+| `agent/tools/` | 工具契约（ToolResult+evidence+source_hash）、五道守卫注册表、nmap/httpx 适配器、**subdomain_enum（子域枚举+递归拓线）**、**L2 工具（dir_enum / script_probe）** | base / registry / nmap_tool / httpx_tool / dir_enum / script_probe |
+| `agent/tools/builtin/` | 降级实现：socket 端口扫描、DoH+socket DNS、Header/meta 指纹 | port_scan / dns_query / fingerprint |
+| `agent/collectors/` | 被动资产拓线（CRT.sh/WHOIS/IP/C段）、技术栈卡片编排 | asset_expander / web_fingerprint |
+| `agent/knowledge/` | CVE 签名快照（SHA256 防投毒）+ 否定证据检索 | cve_base / snapshot |
+| `agent/efficiency/` | 提效减耗：上下文裁剪、精确哈希去重、增量更新、模板压缩、预算三档 | 5 个模块 |
+| `agent/hallucination/` | 抗幻觉：证据绑定、矛盾检测、输出一致性校验 | evidence / contradiction / consistency |
+| `agent/observability/` | 核心指标（10 核心 + 辅助），隐蔽违规/门控绕过恒应 0 | metrics.py |
+| `agent/output/` | 报告渲染（标准结构 + 水印）+ 三格式落盘 + 统一构建器（ReportBuilder）+ 增量对比 + 表格渲染 | report / report_builder / tables / diff |
+| `agent/scripts/` | 授权编排：级联扫描（full_scan）/全资产深度（fleet_l2）/定向（aggressive_l2）/L1 QA（l1_scan）/端口填表（fill_l1_scan）/门控演示（demo_l2）/泄露嗅探签名（leak_signatures）/WhatWeb 插件（techniques）/沙箱（sandbox） | full_scan / fleet_l2 / aggressive_l2 / l1_scan / fill_l1_scan / demo_l2 / sandbox / leak_signatures / techniques |
+| `agent/core/` | LangGraph 会话节点、SQLite 持久化/独立执行日志、模型桥；旧循环保留兼容 | orchestration / llm / agent / context |
+| `agent/cli/` | Typer 入口（三模式）、L0 流水线、会话 REPL | main / pipeline / session |
+| `agent/server/` | **V1.0 新增**：MCP stdio 服务器（零依赖 JSON-RPC 2.0）+ 工具桥 | mcp_server / tools_bridge |
 | `tests/` | 仅真实入口冒烟与端到端测试；详见 [测试约定](testing.md) | smoke / e2e |
 
 ---
@@ -113,7 +113,7 @@ MCP → 原 stdio tool bridge，L2 永久禁止
 | ④ Web 指纹 | Server/**中间件**(Tomcat/WebLogic/Jetty/Kestrel/uWSGI…)/语言/**框架**(ThinkPHP/Django/Spring/Rails/Flask…)/**CMS**(WordPress/Discuz/DedeCMS/EmpireCMS…)/前端/JS库/WAF/CDN + 置信度 + [来源] | Header 签名表（40+）+ meta generator + 页面特征 |
 | ⑤ 内容接口 | HTTP 状态/标题、robots.txt、sitemap.xml 路径线索 | ≤3 次只读 GET |
 | ⑥ 敏感资产 | robots Disallow 提示的入口线索（只读不利用） | 同上 |
-| ⑦ 风险画像 | WAF/CDN 识别、CVE 关联（签名快照）、暴露面建议 | knowledge/cve_base |
+| ⑦ 风险画像 | WAF/CDN 识别、CVE 关联（签名快照）、暴露面建议 | agent/knowledge/cve_base |
 
 ---
 
@@ -124,7 +124,7 @@ MCP → 原 stdio tool bridge，L2 永久禁止
 3. **矛盾检测**：同主体同属性多来源冲突 → `[冲突，需人工核实]`，保留双方、禁止模型二选一；
 4. **一致性校验**：报告生成前比对结论与证据登记簿，"报告有、证据无" → `[无证据]`（CI 开关可阻断发布）。
 
-**CVE 防投毒**：知识库为只读签名快照（`python -m knowledge.snapshot` 从 OSV 拉取并写 SHA256 签名），启动校验签名不匹配拒绝加载；查不到硬输出"未收录"，**绝不编造 CVE 编号**。
+**CVE 防投毒**：知识库为只读签名快照（`python -m agent.knowledge.snapshot` 从 OSV 拉取并写 SHA256 签名），启动校验签名不匹配拒绝加载；查不到硬输出"未收录"，**绝不编造 CVE 编号**。
 
 ---
 
@@ -146,9 +146,9 @@ MCP → 原 stdio tool bridge，L2 永久禁止
 
 ```
 Claude/ZCode (MCP Client)
-   │  initialize → tools/list → tools/call   (stdio, JSON-RPC 2.0, 换行分隔)
+   │  initialize → agent/tools/list → agent/tools/call   (stdio, JSON-RPC 2.0, 换行分隔)
    ▼
-server/mcp_server.py ──► server/tools_bridge.py ──► tools/registry.py（五道守卫）
+agent/server/mcp_server.py ──► agent/server/tools_bridge.py ──► agent/tools/registry.py（五道守卫）
    ▲ 零新增依赖（自实现协议层）      ▲ L2 永久禁止；L1 需 --allow-l1
    ▲ 日志走 stderr（stdout 协议纯净）
 ```
@@ -169,7 +169,7 @@ server/mcp_server.py ──► server/tools_bridge.py ──► tools/registry.p
 
 本节保留初版交付记录，其中测试数量为历史数据；当前测试策略与维护目录以第 10 节和 [测试约定](testing.md) 为准。
 
-- **V1.0（当前）**：三级门控 + 五道守卫链 + 模型接入层 + 工具降级 + 抗幻觉 + 提效减耗 + 报告水印 + **MCP 服务器接入**（Claude/ZCode 等第三方 Agent 自主调用）+ **级联扫描**（full_scan：高级别自动包含低等级）+ **泄露嗅探**（leak_signatures 17 类内容级签名 + 严重度分级）+ **WhatWeb 式插件架构**（tools/techniques/ 6 插件 + 两阶段探测引擎）+ **系统工具网关**（system_scan：优先调度系统已有安全工具）+ **兼容性矩阵**（IPv6/IP 目标/403 答案/Header 大小写）+ **审计哈希链 O(1) 化** + 134 项测试 + Windows/Linux 跨平台 + 实弹验证（多轮 × 多目标形态 × 授权测试机 + 自建靶场）。
+- **V1.0（当前）**：三级门控 + 五道守卫链 + 模型接入层 + 工具降级 + 抗幻觉 + 提效减耗 + 报告水印 + **MCP 服务器接入**（Claude/ZCode 等第三方 Agent 自主调用）+ **级联扫描**（full_scan：高级别自动包含低等级）+ **泄露嗅探**（leak_signatures 17 类内容级签名 + 严重度分级）+ **WhatWeb 式插件架构**（agent/tools/techniques/ 6 插件 + 两阶段探测引擎）+ **系统工具网关**（system_scan：优先调度系统已有安全工具）+ **兼容性矩阵**（IPv6/IP 目标/403 答案/Header 大小写）+ **审计哈希链 O(1) 化** + 134 项测试 + Windows/Linux 跨平台 + 实弹验证（多轮 × 多目标形态 × 授权测试机 + 自建靶场）。
 
 ## 13. 工业级交付审计（终审结论）
 

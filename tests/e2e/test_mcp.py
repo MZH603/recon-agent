@@ -18,7 +18,7 @@ def exchange(run_app, messages, *, cli=False, allow_l1=False):
         args.append("--allow-l1")
     if cli:
         args.insert(0, "--mcp")
-    result = run_app(*args, module="cli.main" if cli else "server.mcp_server",
+    result = run_app(*args, module="agent.cli.main" if cli else "agent.server.mcp_server",
                      input_text="".join(json.dumps(item) + "\n" for item in messages))
     assert result.returncode == 0, result.stdout + result.stderr
     frames = [json.loads(line) for line in result.stdout.splitlines()]

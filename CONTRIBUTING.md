@@ -8,23 +8,16 @@
 | --- | --- |
 | `.github/workflows/` | GitHub Actions 工作流 |
 | `pyproject.toml` | Python 依赖、打包、命令入口和 pytest 配置 |
-| `cli/`、`cli/tui/` | Python CLI 与 Node.js 终端界面 |
-| `core/` | Agent 会话、提示词与编排 |
-| `model/` | 模型协议、适配和调用 |
-| `tools/` | 工具契约、注册表、内置工具、适配器及运行时 |
-| `collectors/`、`knowledge/` | 采集与知识处理 |
-| `gate/`、`security/`、`hallucination/` | 授权、范围限制及证据一致性 |
-| `efficiency/`、`observability/` | 预算、上下文、去重及指标 |
-| `output/`、`server/` | 报告和 MCP 服务 |
-| `platforms/`、`utils/` | 平台适配及公共设施 |
-| `scripts/` | 现有扫描和沙箱脚本 |
+| `agent/` | Python 后端包：CLI、会话编排、模型、工具、门控、MCP、采集和报告 |
+| `tui/` | Node.js 终端界面与 Python 本地桥接适配 |
+| `third_party/tools/` | 上游第三方工具、二进制及字典，不进入 wheel |
 | `tests/smoke/`、`tests/e2e/` | 公开入口的冒烟与端到端测试 |
 | `tests/unit/` | 合并保留的上游历史回归测试，显式运行 |
 | `skills/` | 上游提供的技能说明 |
 | `docs/` | 纳入版本控制的正式文档 |
 | `.local/` | 不提交的参考仓库、草稿及迁移保留资料 |
 
-当前保留现有顶层 Python 包及导入路径。包命名空间迁移与业务重构应单独实施。
+Python 后端统一使用 `agent.*` 导入。TUI 可调用后端公开入口；后端运行逻辑不依赖 TUI 页面实现。
 
 ## 命名与文档
 
@@ -41,9 +34,9 @@
 
 ```sh
 python -m pip install -e ".[dev]"
-npm ci --ignore-scripts --prefix cli/tui
+npm ci --ignore-scripts --prefix tui
 python -m pytest -q
-npm --prefix cli/tui test
+npm --prefix tui test
 git diff --check
 ```
 
