@@ -104,7 +104,8 @@ def _excerpt_summary(groups):
 
 
 def prepare_context(state, gate, guard, capacity, trigger_ratio=0.7, tools=None,
-                    count_tokens=None, *, compact=True):
+                    count_tokens=None, *, compact=True, dynamic_message=None,
+                    blocks=(), compaction_policy=None):
     """Return a provider request and checkpoint updates without mutating state.
 
     ``context_history`` contains only the active, non-dynamic working set;
@@ -126,13 +127,13 @@ def prepare_context(state, gate, guard, capacity, trigger_ratio=0.7, tools=None,
         cursor, active = 0, []
     history = copy.deepcopy((active or []) + original[cursor:])
     systems, rest = _normalized(history)
-    dynamic = _task_context(state, gate, guard)
+    dynamic = _task_context(state, gate, guard) if dynamic_message is None else dynamic_message
     def request(current):
         # Internal origin metadata belongs in checkpoints, never in a provider's
         # strict message schema. Content alone cannot identify XML tool results:
         # an operator may legitimately type the same XML-looking text.
         return [{key: value for key, value in message.items() if key != '_context_tool_result'}
-                for message in systems + [dynamic] + current]
+                for message in systems + [dynamic] + list(blocks) + current]
     def size(current):
         return _request_size(request(current), tools, count_tokens)
     before = size(rest)
@@ -153,12 +154,21 @@ def prepare_context(state, gate, guard, capacity, trigger_ratio=0.7, tools=None,
         remaining = list(enumerate(groups))
         omitted = []
         candidate = rest
+        # Policy input is a snapshot: plugin code must not mutate the protected
+        # conversation groups used to build the actual model request.
+        order = (list(compaction_policy.removal_order(copy.deepcopy(tuple(tuple(group) for group in groups))))
+                 if compaction_policy is not None else list(range(len(groups))))
+        if len(set(order)) != len(order) or any(type(index) is not int or index < 0 or index >= len(groups)
+                                                for index in order):
+            raise ValueError('Compaction policy returned invalid group indices')
         while size(candidate) > capacity * .5:
-            removable = next((position for position, (index, _) in enumerate(remaining)
-                              if index not in protected), None)
+            removable = next((position for index in order if index not in protected
+                              for position, (candidate_index, _) in enumerate(remaining)
+                              if index == candidate_index), None)
             if removable is None:
                 break
-            _, group = remaining.pop(removable)
+            index, group = remaining.pop(removable)
+            order.remove(index)
             omitted.append(group)
             candidate = [_excerpt_summary(omitted)] + [message for _, group in remaining for message in group]
         # If the excerpts prevent the target or capacity fit, prefer complete

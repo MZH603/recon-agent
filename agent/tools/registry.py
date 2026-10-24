@@ -153,9 +153,11 @@ class ToolRegistry:
 def build_default(settings: Settings, gate: ScanGate, main_target: str, *, session_id=None) -> ToolRegistry:
     """Compatibility wrapper for the built-in provider and enabled plugins."""
     from agent.plugins.builtin_tools import BuiltinTools
+    from agent.plugins.builtin_context import BuiltinContext
     from agent.plugins.host import PluginHost
     registry = ToolRegistry(settings, gate, main_target)
     plugin_host = PluginHost(registry)
-    plugin_host.load_enabled(settings, builtin=BuiltinTools(settings, main_target, session_id))
+    plugin_host.load_enabled(settings, builtin=BuiltinTools(settings, main_target, session_id),
+                             builtins=(BuiltinContext(),))
     registry.plugin_host = plugin_host
     return registry

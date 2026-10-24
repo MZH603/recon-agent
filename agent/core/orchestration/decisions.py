@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from langgraph.types import interrupt
 from agent.core.orchestration.controls import CONTROLS, control_specs
 from agent.core.orchestration.completion import completion_text, REMINDER
-from agent.core.orchestration.model_context import prepare_context
+from agent.plugins.context import ContextProviderError
 from agent.efficiency.budget_guard import BudgetExhausted
 from agent.model.cost import valid_cost
 from agent.model.base import ModelUnavailable, parse_xml_tool_calls, StreamUsage, response_events, conservative_tokens
@@ -25,10 +25,17 @@ class DecisionNodes:
             return self._pause_update('limit', 'Decision limit reached. Continue grants one more bounded segment; budget remains cumulative.', options=['Continue', 'Stop'])
         self.registry.select_tools(state.get('selected_tool_names', []))
         tools = self.registry.specs() + control_specs()
-        messages, context_update = prepare_context(
-            state, self.gate, self.guard, self.settings.CONTEXT_BUDGET,
-            getattr(self.settings, 'COMPACT_TRIGGER_RATIO', .70), tools=tools,
-            count_tokens=getattr(self.llm, 'count_tokens', None))
+        try:
+            messages, context_update, context_errors = self._assemble_context(
+                state, tools, compact=True)
+        except ContextProviderError as exc:
+            return self._pause_update('context_provider',
+                f'Required context or compaction provider failed: {exc}. Resolve it before continuing.',
+                options=['Continue', 'Stop'])
+        for failure in context_errors:
+            event = {'kind': 'context_provider_error', **failure}
+            await self.store.record_event(self.session_id, event)
+            self._emit('context_provider_error', **failure)
         self._emit('context', **{key: value for key, value in context_update.items()
                                 if key not in ('context_history', 'context_cursor')})
         try:

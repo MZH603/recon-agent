@@ -26,6 +26,16 @@ class PluginHost:
     def plugin_ids(self) -> tuple[str, ...]:
         return tuple(provider.manifest.id for provider in self._providers)
 
+    @property
+    def context_providers(self):
+        return tuple(provider for provider in self._providers
+                     if 'context' in provider.manifest.capabilities)
+
+    @property
+    def compaction_policy(self):
+        return next((provider for provider in self._providers
+                     if 'compaction' in provider.manifest.capabilities), None)
+
     def register_tool(self, tool):
         if self._remaining_names is None:
             raise RuntimeError('Tools can only be registered during provider registration')
@@ -34,7 +44,7 @@ class PluginHost:
         self.registry.register(tool, replace=False)
         self._remaining_names.remove(tool.name)
 
-    def load_enabled(self, settings, *, builtin=None):
+    def load_enabled(self, settings, *, builtin=None, builtins=()):
         entries = {entry.name: entry for entry in sorted(
             metadata.entry_points(group=self.ENTRY_POINT_GROUP), key=lambda entry: entry.name)}
         providers = []
@@ -61,7 +71,8 @@ class PluginHost:
             if provider.manifest.id != reference.id:
                 raise ValueError(f'Plugin ID mismatch: {reference.id}')
             providers.append((provider, reference.config))
-        self.load(([(builtin, {})] if builtin is not None else []) + providers)
+        self.load(([(builtin, {})] if builtin is not None else []) +
+                  [(provider, {}) for provider in builtins] + providers)
 
     def load(self, providers):
         """Register idle tools. Providers must acquire resources only in start()."""
@@ -73,9 +84,18 @@ class PluginHost:
             manifest = getattr(provider, 'manifest', None)
             if not isinstance(manifest, PluginManifest):
                 raise ValueError('Plugin requires a valid manifest')
-            for method in ('describe_tool_names', 'register', 'start', 'close'):
+            methods = ('register', 'start', 'close')
+            if 'tools' in manifest.capabilities:
+                methods += ('describe_tool_names',)
+            if 'context' in manifest.capabilities:
+                methods += ('collect',)
+            if 'compaction' in manifest.capabilities:
+                methods += ('removal_order',)
+            for method in methods:
                 if not callable(getattr(provider, method, None)):
                     raise ValueError(f'Plugin {manifest.id} requires {method}()')
+            if 'context' in manifest.capabilities and type(getattr(provider, 'required', None)) is not bool:
+                raise ValueError(f'Context plugin {manifest.id} requires a boolean required flag')
             if manifest.id in by_id:
                 raise ValueError(f'Duplicate plugin ID: {manifest.id}')
             by_id[manifest.id] = provider
@@ -88,6 +108,10 @@ class PluginHost:
             for dependency in provider.manifest.dependencies:
                 if dependency not in by_id:
                     raise ValueError(f'Plugin {ident} requires missing dependency {dependency}')
+        compactors = [ident for ident, provider in by_id.items()
+                      if 'compaction' in provider.manifest.capabilities]
+        if len(compactors) > 1:
+            raise ValueError(f'Only one compaction policy may be enabled: {compactors}')
         ordered = []
         visiting = set()
         visited = set()
@@ -109,7 +133,8 @@ class PluginHost:
             'ask_user', 'update_plan', 'finish_task', 'recon_safety_policy'}
         for provider in ordered:
             ident = provider.manifest.id
-            names = tuple(provider.describe_tool_names(configs[ident]))
+            names = (tuple(provider.describe_tool_names(configs[ident]))
+                     if 'tools' in provider.manifest.capabilities else ())
             if any(not isinstance(name, str) or not name for name in names):
                 raise ValueError(f'Invalid tool name declaration for {ident}')
             for name in names:

@@ -113,6 +113,17 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         if self.graph is None or self.store.connection is None:
             raise RuntimeError('SessionRuntime must be used inside an async context')
 
+    def _assemble_context(self, values, tools, *, compact):
+        from agent.plugins.context import assemble_context
+        host = self.registry.plugin_host
+        return assemble_context(values, self.gate, self.guard,
+            self.settings.CONTEXT_BUDGET,
+            providers=host.context_providers if host is not None else (),
+            trigger_ratio=self.settings.COMPACT_TRIGGER_RATIO,
+            tools=tools, count_tokens=getattr(self.llm, 'count_tokens', None),
+            compact=compact,
+            compaction_policy=host.compaction_policy if host is not None else None)
+
     async def _restore_budget(self):
         snapshot = await self.graph.aget_state(self.config)
         values = snapshot.values
@@ -153,11 +164,19 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             values['pending'] = self._pending('recovery',
                 'A checkpoint has unfinished work. Continue recovery or stop?', options=['Continue', 'Stop'])
         from agent.core.orchestration.controls import control_specs
-        from agent.core.orchestration.model_context import prepare_context
-        _, context = prepare_context(values, self.gate, self.guard,
-            self.settings.CONTEXT_BUDGET, self.settings.COMPACT_TRIGGER_RATIO,
-            tools=self.registry.specs() + control_specs(),
-            count_tokens=getattr(self.llm, 'count_tokens', None), compact=False)
+        from agent.plugins.context import ContextProviderError
+        try:
+            _, context, _ = self._assemble_context(values,
+                self.registry.specs() + control_specs(), compact=False)
+        except ContextProviderError as exc:
+            # Preview remains available so an operator can inspect/stop a
+            # paused session even when a required source is offline.
+            from agent.core.orchestration.model_context import prepare_context
+            _, context = prepare_context(values, self.gate, self.guard,
+                self.settings.CONTEXT_BUDGET, self.settings.COMPACT_TRIGGER_RATIO,
+                tools=self.registry.specs() + control_specs(),
+                count_tokens=getattr(self.llm, 'count_tokens', None), compact=False)
+            values['context_error'] = str(exc)
         values.update({key: context[key] for key in (
             'context_tokens', 'context_capacity', 'context_trigger_tokens', 'context_estimated')})
         return values

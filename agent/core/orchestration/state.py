@@ -24,6 +24,7 @@ class SessionState(TypedDict, total=False):
     context_compressed: bool
     context_limited: bool
     context_estimated: bool
+    context_error: str
     deferred_user: list[str]
     plan: str
     queued_calls: list[dict[str, Any]]
