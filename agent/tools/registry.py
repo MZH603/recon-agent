@@ -154,10 +154,18 @@ def build_default(settings: Settings, gate: ScanGate, main_target: str, *, sessi
     """Compatibility wrapper for the built-in provider and enabled plugins."""
     from agent.plugins.builtin_tools import BuiltinTools
     from agent.plugins.builtin_context import BuiltinContext
+    from agent.plugins.react_loop import ReactLoop
+    from agent.plugins.example_plan_loop import PlanFirstLoop
     from agent.plugins.host import PluginHost
     registry = ToolRegistry(settings, gate, main_target)
     plugin_host = PluginHost(registry)
+    selected = {'builtin-react': ReactLoop, 'builtin-plan-first': PlanFirstLoop}
+    builtin_loop = selected.get(settings.agent_loop)
+    if builtin_loop is None and settings.agent_loop not in {plugin.id for plugin in settings.plugins}:
+        raise ValueError(f'Unknown agent loop: {settings.agent_loop}')
     plugin_host.load_enabled(settings, builtin=BuiltinTools(settings, main_target, session_id),
-                             builtins=(BuiltinContext(),))
+                             builtins=(BuiltinContext(),) + ((builtin_loop(),) if builtin_loop else ()))
+    if plugin_host.loop_provider is None or plugin_host.loop_provider.manifest.id != settings.agent_loop:
+        raise ValueError(f'Configured agent loop is not available: {settings.agent_loop}')
     registry.plugin_host = plugin_host
     return registry

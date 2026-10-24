@@ -4,6 +4,9 @@ from uuid import uuid4
 
 
 class SessionState(TypedDict, total=False):
+    loop_id: str
+    loop_state: dict[str, dict[str, Any]]
+    loop_turns: int
     selected_tool_names: list[str]
     task_id: str
     segment_decisions: int
@@ -54,7 +57,7 @@ class SessionState(TypedDict, total=False):
 
 
 def initial_state(session_id: str, target: str, system_prompt: str) -> SessionState:
-    return SessionState(selected_tool_names=[], task_id=uuid4().hex, segment_decisions=0, segment_actions=0,
+    return SessionState(loop_id='builtin-react', loop_state={}, loop_turns=0, selected_tool_names=[], task_id=uuid4().hex, segment_decisions=0, segment_actions=0,
                         steps=0, segment_steps=0,
                         session_id=session_id, target=target,
                         messages=[{'role': 'system', 'content': system_prompt}] if system_prompt else [],

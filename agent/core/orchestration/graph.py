@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import AsyncExitStack
 from pathlib import Path
 from uuid import uuid4
@@ -22,6 +23,8 @@ from agent.gate.scan_gate import ScanGate
 from agent.tools.registry import ToolRegistry
 from agent.utils.config import Settings
 from agent.model.base import observe
+from agent.plugins.loop import LoopEvent, LoopView, serializable_state
+from agent.plugins.react_loop import ReactLoop
 
 
 class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupport):
@@ -58,6 +61,50 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         self._stack = AsyncExitStack()
         self._lock = asyncio.Lock()
         self._permit = None  # one action, in this process only
+        host = registry.plugin_host
+        self.loop = host.loop_provider if host is not None and host.loop_provider is not None else ReactLoop()
+        if self.loop.manifest.id != settings.agent_loop:
+            raise ValueError(f'Configured agent loop is not available: {settings.agent_loop}')
+
+    def _loop_view(self, state):
+        # A detached snapshot gives plugins data, never the registry, gate, model or store.
+        return LoopView(session_id=self.session_id, target=self.target,
+            task_goal=state.get('task_goal', ''),
+            messages=tuple(json.loads(json.dumps(state.get('messages', [])))),
+            results=tuple(json.loads(json.dumps(state.get('results', [])))),
+            plan=state.get('plan', ''))
+
+    def _loop_private(self, state):
+        return serializable_state(state.get('loop_state', {}).get(self.loop.manifest.id))
+
+    def _loop_update(self, state, private):
+        return {'loop_state': {**state.get('loop_state', {}),
+                               self.loop.manifest.id: serializable_state(private)}}
+
+    def _loop_result_update(self, state, update, result):
+        private = self.loop.on_result(self._loop_view({**state, **update}),
+            json.loads(json.dumps(result)), self._loop_private(state))
+        return self._loop_update(state, private)
+
+    def _loop_event_update(self, state, kind, pending, value=None):
+        event = LoopEvent(kind=kind, pending_kind=pending['kind'],
+            event_id=pending['event_id'], value=None if value is None else str(value))
+        private = self.loop.on_event(self._loop_view(state), event, self._loop_private(state))
+        return self._loop_update(state, private) if private is not None else {}
+
+    async def _run_node(self, name, state):
+        update = await getattr(self, '_' + name)(state)
+        # A node's returned update is checkpointed before the pause interrupt.
+        # Emitting here avoids replaying the pause hook when LangGraph resumes it.
+        if name != 'pause' and update.get('route') == 'pause':
+            pending = update.get('pending')
+            if pending and pending.get('kind') != 'agent_loop':
+                try:
+                    current = {**state, **update}
+                    update = {**update, **self._loop_event_update(current, 'pause', pending)}
+                except Exception as exc:
+                    update = {**update, **self._loop_error(exc)}
+        return update
 
     def _emit(self, kind, **payload):
         observe(self.on_event, {'kind': kind, **payload})
@@ -77,7 +124,9 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             await saver.setup()
             builder = StateGraph(SessionState)
             for name in ('decide', 'validate', 'authorize', 'execute', 'evaluate', 'pause'):
-                builder.add_node(name, getattr(self, '_' + name))
+                async def run_node(state, node_name=name):
+                    return await self._run_node(node_name, state)
+                builder.add_node(name, run_node)
                 builder.add_conditional_edges(name, lambda state: state['route'],
                     {node: node for node in ('decide', 'validate', 'authorize', 'execute', 'evaluate', 'pause')} | {'end': END})
             builder.add_edge(START, 'decide')
@@ -86,11 +135,15 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             if snapshot.values:
                 if snapshot.values['target'] != self.target:
                     raise ValueError('Stored session belongs to another target')
+                stored_loop = snapshot.values.get('loop_id', 'builtin-react')
+                if stored_loop != self.loop.manifest.id:
+                    raise ValueError(f'Stored agent loop {stored_loop} differs from configured {self.loop.manifest.id}')
             else:
                 if self.require_existing:
                     raise ValueError(f'Session {self.session_id} does not exist')
-                await self.graph.aupdate_state(self.config,
-                    initial_state(self.session_id, self.target, self.system_prompt), as_node='decide')
+                initial = initial_state(self.session_id, self.target, self.system_prompt)
+                initial['loop_id'] = self.loop.manifest.id
+                await self.graph.aupdate_state(self.config, initial, as_node='decide')
             self.registry.select_tools(snapshot.values.get('selected_tool_names', []))
             await self._restore_budget()
             if self.registry.plugin_host is not None:
@@ -113,7 +166,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
         if self.graph is None or self.store.connection is None:
             raise RuntimeError('SessionRuntime must be used inside an async context')
 
-    def _assemble_context(self, values, tools, *, compact):
+    def _assemble_context(self, values, tools, *, compact, extra_messages=()):
         from agent.plugins.context import assemble_context
         host = self.registry.plugin_host
         return assemble_context(values, self.gate, self.guard,
@@ -122,7 +175,8 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             trigger_ratio=self.settings.COMPACT_TRIGGER_RATIO,
             tools=tools, count_tokens=getattr(self.llm, 'count_tokens', None),
             compact=compact,
-            compaction_policy=host.compaction_policy if host is not None else None)
+            compaction_policy=host.compaction_policy if host is not None else None,
+            extra_messages=extra_messages)
 
     async def _restore_budget(self):
         snapshot = await self.graph.aget_state(self.config)
@@ -265,6 +319,7 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
                 current['status'] = 'completed'
             await self.store.archive_task(self.session_id, current['task_id'], current)
             values = initial_state(self.session_id, self.target, self.system_prompt)
+            values['loop_id'] = self.loop.manifest.id
             values.update(selected_tool_names=current.get('selected_tool_names', []),
                 decisions=current['decisions'], actions=current['actions'], steps=current['steps'],
                 segment_decisions=current['decisions'], segment_actions=current['actions'],

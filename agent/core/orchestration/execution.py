@@ -97,6 +97,10 @@ class ExecutionNodes:
         result = state['current_result']
         update = self._consume(state, result)
         update['current_result'] = None
+        try:
+            update.update(self._loop_result_update(state, update, result))
+        except Exception as exc:
+            return {**update, **self._loop_error(exc)}
         if result['name'] == 'tool_catalog' and result['success']:
             self.registry.select_tools(result.get('data', {}).get('selected_tools', []))
             update['selected_tool_names'] = self.registry.selected_tool_names

@@ -62,7 +62,7 @@ def _freeze(value):
 
 def assemble_context(state, gate, guard, capacity, *, providers=(), tools=None,
                      trigger_ratio=.7, count_tokens=None, compact=True,
-                     compaction_policy=None):
+                     compaction_policy=None, extra_messages=()):
     """Collect immutable data, assemble in host-owned roles, then count the full request."""
     from agent.core.orchestration.model_context import prepare_context, _task_context
 
@@ -114,7 +114,7 @@ def assemble_context(state, gate, guard, capacity, *, providers=(), tools=None,
     while True:
         _, preview = prepare_context(state, gate, guard, capacity, trigger_ratio,
             tools=tools, count_tokens=count_tokens, compact=False,
-            dynamic_message=dynamic, blocks=render(active))
+            dynamic_message=dynamic, blocks=render(active) + list(extra_messages))
         optional = [block for block in active if not block.required]
         if preview['context_tokens'] < preview['context_trigger_tokens'] or not optional:
             break
@@ -122,7 +122,7 @@ def assemble_context(state, gate, guard, capacity, *, providers=(), tools=None,
     try:
         messages, metrics = prepare_context(state, gate, guard, capacity, trigger_ratio,
             tools=tools, count_tokens=count_tokens, compact=compact,
-            dynamic_message=dynamic, blocks=render(active),
+            dynamic_message=dynamic, blocks=render(active) + list(extra_messages),
             compaction_policy=compaction_policy)
     except Exception as exc:
         if compaction_policy is not None:

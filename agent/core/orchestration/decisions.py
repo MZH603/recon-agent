@@ -6,12 +6,13 @@ from uuid import uuid4
 from pydantic import ValidationError
 from langgraph.types import interrupt
 from agent.core.orchestration.controls import CONTROLS, control_specs
-from agent.core.orchestration.completion import completion_text, REMINDER
 from agent.plugins.context import ContextProviderError
 from agent.efficiency.budget_guard import BudgetExhausted
 from agent.model.cost import valid_cost
-from agent.model.base import ModelUnavailable, parse_xml_tool_calls, StreamUsage, response_events, conservative_tokens
+from agent.model.base import ModelUnavailable, StreamUsage, response_events, conservative_tokens
 from agent.tools.base import ToolResult
+from agent.plugins.loop import AskUser, Complete, Continue, ModelTurn, ToolBatch, serializable_calls
+from agent.core.orchestration.completion import REMINDER
 
 
 class DecisionNodes:
@@ -23,11 +24,21 @@ class DecisionNodes:
         estimated_calls = task_usage['usage_estimated_calls']
         if decisions - state.get('segment_decisions', 0) >= self.max_decisions:
             return self._pause_update('limit', 'Decision limit reached. Continue grants one more bounded segment; budget remains cumulative.', options=['Continue', 'Stop'])
+        try:
+            preparation = self.loop.prepare(self._loop_view(state), self._loop_private(state))
+            if not isinstance(preparation, ModelTurn):
+                return self._loop_proposal(state, preparation, {})
+            if not isinstance(preparation.instructions, str):
+                raise ValueError('ModelTurn instructions must be text')
+        except Exception as exc:
+            return self._loop_error(exc)
         self.registry.select_tools(state.get('selected_tool_names', []))
         tools = self.registry.specs() + control_specs()
         try:
             messages, context_update, context_errors = self._assemble_context(
-                state, tools, compact=True)
+                state, tools, compact=True,
+                extra_messages=([{'role': 'user', 'content': '[agent loop instruction] ' + preparation.instructions}]
+                                if preparation.instructions else ()))
         except ContextProviderError as exc:
             return self._pause_update('context_provider',
                 f'Required context or compaction provider failed: {exc}. Resolve it before continuing.',
@@ -94,25 +105,82 @@ class DecisionNodes:
             await self.store.save_task_usage(self.session_id, state['task_id'], decisions, self.guard.used_tokens,
                                         self.guard.used_cost, unknown_costs, estimated_calls)
             self._emit('model_end', success=response is not None)
-        calls = response.tool_calls or parse_xml_tool_calls(response.content)
-        native = bool(response.tool_calls)
-        visible, complete = completion_text(response.content)
-        message = {'role': 'assistant', 'content': visible if complete else response.content}
+        try:
+            proposal = self.loop.on_response(self._loop_view(state), response, self._loop_private(state))
+            if isinstance(proposal, ToolBatch):
+                proposal = ToolBatch(serializable_calls(proposal.calls), native=proposal.native)
+            if ((response.tool_calls or isinstance(proposal, ToolBatch) and proposal.native) and
+                    (not isinstance(proposal, ToolBatch) or not proposal.native or
+                     tuple(response.tool_calls) != proposal.calls)):
+                raise ValueError('Native tool calls must be returned as the matching native ToolBatch')
+        except Exception as exc:
+            return {'decisions': decisions, **context_update, **self._loop_error(exc)}
+        message = {'role': 'assistant', 'content': proposal.answer if isinstance(proposal, Complete) else response.content}
         if response.reasoning_content:
             message['reasoning_content'] = response.reasoning_content
-        if native:
+        if isinstance(proposal, ToolBatch) and proposal.native:
             message['tool_calls'] = [{'id': c.id, 'type': 'function', 'function':
-                {'name': c.name, 'arguments': json.dumps(c.arguments, ensure_ascii=False)}} for c in calls]
+                {'name': c.name, 'arguments': json.dumps(c.arguments, ensure_ascii=False)}} for c in proposal.calls]
         update = {**context_update, 'decisions': decisions, 'used_tokens': self.guard.used_tokens,
-                  'used_cost': self.guard.used_cost, 'cost_unknown_calls': unknown_costs, 'usage_estimated_calls': estimated_calls, 'messages': state['messages'] + [message]}
-        if not calls:
-            if complete:
-                self._emit('completed', answer=visible)
-                return {**update, 'answer': visible, 'status': 'completed', 'pending': None, 'route': 'end'}
-            return {**update, 'messages': update['messages'] + [{'role': 'system', 'content': REMINDER}],
-                    'route': 'decide', 'pending': None}
-        return {**update, 'queued_calls': [{**c.model_dump(), 'native': native, 'execution_id': uuid4().hex} for c in calls],
-                'route': 'validate', 'pending': None}
+                  'used_cost': self.guard.used_cost, 'cost_unknown_calls': unknown_costs, 'usage_estimated_calls': estimated_calls,
+                  'loop_turns': 0, 'messages': state['messages'] + [message]}
+        return self._loop_proposal({**state, **update}, proposal, update)
+
+    def _loop_error(self, exc):
+        return self._pause_update('agent_loop',
+            f'Agent loop {self.loop.manifest.id} failed: {exc}. Resolve it before continuing.',
+            options=['Continue', 'Stop'])
+
+    def _loop_proposal(self, state, proposal, update):
+        try:
+            if isinstance(proposal, Complete):
+                if not isinstance(proposal.answer, str):
+                    raise ValueError('Complete answer must be text')
+                self._emit('completed', answer=proposal.answer)
+                return {**update, 'answer': proposal.answer, 'status': 'completed',
+                        'pending': None, 'route': 'end'}
+            if isinstance(proposal, AskUser):
+                if type(proposal.question) is not str or not proposal.question.strip():
+                    raise ValueError('AskUser requires a question')
+                if not isinstance(proposal.options, (tuple, list)) or any(
+                        type(option) is not str or not option.strip()
+                        for option in proposal.options):
+                    raise ValueError('AskUser options must be text')
+                return {**update, **self._pause_update('ask_user', proposal.question,
+                    options=list(proposal.options))}
+            if isinstance(proposal, ToolBatch):
+                if not proposal.calls:
+                    raise ValueError('ToolBatch cannot be empty')
+                if type(proposal.native) is not bool:
+                    raise ValueError('ToolBatch native flag must be boolean')
+                if proposal.native and not update:
+                    raise ValueError('Native tool batches require a matching assistant response')
+                calls = serializable_calls(proposal.calls)
+                return {**update, 'queued_calls': [
+                    {**call.model_dump(), 'native': proposal.native, 'execution_id': uuid4().hex}
+                    for call in calls], 'route': 'validate', 'pending': None}
+            if isinstance(proposal, Continue):
+                if type(proposal.reminder) is not str:
+                    raise ValueError('Continue reminder must be text')
+                turns = state.get('loop_turns', 0) + 1 if not update else 0
+                if turns > self.max_steps:
+                    return {**update, **self._pause_update('limit', 'Agent loop continuation limit reached.', options=['Stop'])}
+                private = self._loop_private(state) if proposal.state is None else proposal.state
+                role = ('system' if self.loop.manifest.id == 'builtin-react' and
+                        proposal.reminder == REMINDER else 'user')
+                content = (proposal.reminder if role == 'system' else
+                           '[agent loop reminder] ' + proposal.reminder)
+                reminder = ([{'role': role, 'content': content}]
+                            if proposal.reminder else [])
+                return {**update, **self._loop_update(state, private), 'loop_turns': turns,
+                        'messages': state['messages'] + reminder,
+                        'route': 'decide', 'pending': None}
+            raise ValueError(f'Unsupported loop proposal: {type(proposal).__name__}')
+        except Exception as exc:
+            safe = dict(update)
+            if 'messages' in safe:
+                safe['messages'] = safe['messages'][:-1]
+            return {**safe, **self._loop_error(exc)}
 
     async def _validate(self, state):
         if not state['queued_calls']:
@@ -132,6 +200,10 @@ class DecisionNodes:
                 return self._pause_update('ask_user', params.question, options=params.options, action=call['name'])
             result = ToolResult(name=call['name'], success=True, data=params.model_dump()).model_dump()
             update = self._consume(state, result, record=False)
+            try:
+                update.update(self._loop_result_update(state, update, result))
+            except Exception as exc:
+                return {**update, **self._loop_error(exc)}
             if call['name'] == 'update_plan':
                 self._emit('plan', text=params.plan)
                 return {**update, 'plan': params.plan, 'schema_attempts': 0,
@@ -155,15 +227,22 @@ class DecisionNodes:
         self._emit('pause', pending=pending)
         await self.store.record_event(self.session_id, pending)
         value = interrupt(pending)
+        event_update = {}
+        if pending['kind'] != 'agent_loop':
+            try:
+                event_update = self._loop_event_update(state, 'resume', pending, value)
+            except Exception as exc:
+                return self._loop_error(exc)
+        state = {**state, **event_update}
         if str(value).strip().lower() in ('stop', 'quit', 'exit', '退出', 'abort'):
             if str(value).strip().lower() == 'abort':
                 self.gate.abort()
             closing = self._cancel_queue(state, 'Operator stopped the pending task.')
-            return {**closing, 'status': 'stopped', 'pending': None, 'route': 'end'}
+            return {**event_update, **closing, 'status': 'stopped', 'pending': None, 'route': 'end'}
         segment = {}
         if pending['kind'] == 'limit':
             if str(value).strip().lower() not in ('continue', '继续'):
-                return {'route': 'pause'}
+                return {**event_update, 'route': 'pause'}
             usage = await self.store.usage(self.session_id)
             segment = {'segment_decisions': max(state['decisions'], usage['decisions']),
                        'segment_actions': await self.store.action_count(self.session_id),
@@ -171,6 +250,10 @@ class DecisionNodes:
         if pending['kind'] == 'ask_user' and state['queued_calls']:
             result = ToolResult(name='ask_user', success=True, data={'answer': value}).model_dump()
             update = self._consume(state, result, record=False)
+            try:
+                update.update(self._loop_result_update(state, update, result))
+            except Exception as exc:
+                return {**event_update, **update, **self._loop_error(exc)}
         elif state['queued_calls'] and str(value).strip().lower() not in ('continue', '继续', 'retry', 'yes'):
             update = self._cancel_queue(state, 'Operator changed the task; pending action cancelled.')
             update['messages'] += [{'role': 'user', 'content': str(value)}]
@@ -183,5 +266,5 @@ class DecisionNodes:
         if pending['kind'] == 'schema':
             update['schema_attempts'] = 0
         queue = update.get('queued_calls', state['queued_calls'])
-        return {**update, **segment, 'status': 'running', 'pending': None,
+        return {**event_update, **update, **segment, 'status': 'running', 'pending': None,
                 'route': 'validate' if queue else 'decide'}

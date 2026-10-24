@@ -110,6 +110,7 @@ class Settings(BaseModel):
     mcp_servers: list[MCPServerConfig] = Field(default_factory=list)
     extension_tools: ExtensionToolsConfig = Field(default_factory=ExtensionToolsConfig)
     plugins: list[PluginReference] = Field(default_factory=list)
+    agent_loop: str = 'builtin-react'
     TOOL_EVIDENCE_DIR: str = ""
     TOOL_TIMEOUT_SECONDS: float = Field(default=120, gt=0,allow_inf_nan=False)
     SUBDOMAIN_ENUM_TIMEOUT_SECONDS: float = Field(default=1800, ge=120, le=3600)

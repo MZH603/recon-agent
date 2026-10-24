@@ -36,6 +36,11 @@ class PluginHost:
         return next((provider for provider in self._providers
                      if 'compaction' in provider.manifest.capabilities), None)
 
+    @property
+    def loop_provider(self):
+        return next((provider for provider in self._providers
+                     if 'loop' in provider.manifest.capabilities), None)
+
     def register_tool(self, tool):
         if self._remaining_names is None:
             raise RuntimeError('Tools can only be registered during provider registration')
@@ -91,6 +96,8 @@ class PluginHost:
                 methods += ('collect',)
             if 'compaction' in manifest.capabilities:
                 methods += ('removal_order',)
+            if 'loop' in manifest.capabilities:
+                methods += ('prepare', 'on_response', 'on_result', 'on_event')
             for method in methods:
                 if not callable(getattr(provider, method, None)):
                     raise ValueError(f'Plugin {manifest.id} requires {method}()')
@@ -112,6 +119,10 @@ class PluginHost:
                       if 'compaction' in provider.manifest.capabilities]
         if len(compactors) > 1:
             raise ValueError(f'Only one compaction policy may be enabled: {compactors}')
+        loops = [ident for ident, provider in by_id.items()
+                 if 'loop' in provider.manifest.capabilities]
+        if len(loops) > 1:
+            raise ValueError(f'Only one agent loop may be enabled: {loops}')
         ordered = []
         visiting = set()
         visited = set()
@@ -184,7 +195,13 @@ class PluginHost:
             try:
                 for provider in self._providers:
                     self._started.append(provider)
-                    await provider.start(session_view)
+                    view = session_view
+                    if 'loop' in provider.manifest.capabilities:
+                        from agent.plugins.loop import LoopView
+                        view = LoopView(session_id=getattr(session_view, 'session_id', 'mcp'),
+                            target=self.registry.main_target, task_goal='', messages=(),
+                            results=(), plan='')
+                    await provider.start(view)
                 self._active = True
             except BaseException:
                 try:
