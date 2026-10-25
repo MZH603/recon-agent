@@ -179,12 +179,26 @@ def test_auth_passes_tool_selection_to_idle_session(monkeypatch, tmp_path, profi
 @pytest.mark.parametrize("configure", [False, True])
 def test_rich_optional_configuration_can_be_selected_or_skipped(monkeypatch, tmp_path, profile, configure):
     from cli.launcher import run_rich_setup
+    import getpass as getpass_module
     settings = Settings(model={"api_key": KEY})
     monkeypatch.setattr("cli.launcher.sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("cli.launcher.sys.stdout.isatty", lambda: True)
-    answers = iter(["", "", "example.org", str(profile) if configure else "", *(["1"] if configure else []), "yes"])
-    monkeypatch.setattr("builtins.input", lambda *args: next(answers))
-    monkeypatch.setattr("cli.launcher.getpass.getpass", lambda *args: "")
+    # Prompts: api_base, model, target, tools_config_path, [tool_choice], authorized
+    # getpass is called separately
+    base_answers = ["https://api.test/v1", "test-model", "example.org"]
+    if configure:
+        per_iter = base_answers + [str(profile), "1", "example.org"]
+    else:
+        per_iter = base_answers + ["", "example.org"]
+    answers = iter(per_iter)
+    def mock_input(*args):
+        try:
+            return next(answers)
+        except StopIteration:
+            return "example.org"
+    monkeypatch.setattr("builtins.input", mock_input)
+    getpass_module.getpass = lambda *args: KEY
+    monkeypatch.setattr("cli.launcher.getpass.getpass", getpass_module.getpass)
     result, code = asyncio.run(run_rich_setup(prefill(settings, config_dir=tmp_path), settings))
     assert code == 0
     if configure:

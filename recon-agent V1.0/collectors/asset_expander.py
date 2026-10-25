@@ -51,7 +51,7 @@ async def expand_assets(target: str, settings: Settings | None = None) -> dict:
 async def _collect_dns(domain: str, settings: Settings) -> dict:
     """并发查询 DNS 全记录（HARD: 仅触碰公共解析器，并发不影响目标）。
 
-    预热首次查询建立解析器记忆 → 其余 4 类型并行（每实例独立限速器）。
+    预热首次查询建立解析器记忆 → 其余 4 类型并行（每实例独立限速器 → 并行）。
     实测：5 类型串行 ~55s → 预热+并行 ~13s。
     """
     from tools.builtin.dns_query import DNSParams, DNSQueryTool
@@ -60,13 +60,6 @@ async def _collect_dns(domain: str, settings: Settings) -> dict:
     warmup = DNSQueryTool(settings)
     warmup_result = await warmup.run(DNSParams(target=domain, rtype="A"))
 
-    records: dict = {}
-    if warmup_result.success:
-        records["A"] = [r.get("data") for r in warmup_result.data.get("records", [])]
-    else:
-        records["A"] = []
-        records.setdefault("_errors", []).append(f"A: {warmup_result.error[:120]}")
-
     # 并发查询剩余类型（独立工具实例 → 独立限速器 → 并行）
     async def _query(rtype: str):
         tool = DNSQueryTool(settings)
@@ -74,6 +67,13 @@ async def _collect_dns(domain: str, settings: Settings) -> dict:
         return rtype, result
 
     results = await asyncio.gather(*[_query(rt) for rt in ("MX", "NS", "TXT", "SOA")])
+    records: dict = {}
+    if warmup_result.success:
+        records["A"] = [r.get("data") for r in warmup_result.data.get("records", [])]
+    else:
+        records["A"] = []
+        records.setdefault("_errors", []).append(f"A: {warmup_result.error[:120]}")
+
     for rtype, result in results:
         if result.success:
             records[rtype] = [r.get("data") for r in result.data.get("records", [])]
@@ -99,24 +99,40 @@ async def _crtsh_subdomains(domain: str, settings: Settings) -> dict:
     out: dict = {"in_scope": [], "out_of_scope": [], "notes": []}
     names: set[str] = set()
     used_source = ""
-    for source, template in CT_SOURCES:
+
+    async def fetch_one(source: str, template: str) -> tuple[str, list[dict]]:
         try:
             raw = await run_sync(_http_get, template.format(domain=domain), 30)
             entries = json.loads(raw)
+            return source, entries
+        except (OSError, json.JSONDecodeError, ValueError):
+            return source, []
+
+    results = await asyncio.gather(
+        *_((src, tpl) for src, tpl in CT_SOURCES)
+    )
+    for source, entries in results:
+        if not used_source:
             used_source = source
             break
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
-            out["notes"].append(f"CT 源 {source} 不可达（{type(exc).__name__}）")
-            entries = []
+        # If the first source failed (empty entries but no exception), still try next
+        if not entries and not used_source:
+            used_source = source
+            break
+
     if not used_source:
         out["notes"].append(
             "全部 CT 源不可达，子域枚举降级为空；可安装 subfinder 提升召回率"
         )
         return out
-    for entry in entries:
-        # crt.sh 条目含 name 字段；certspotter 条目含 dnsnames 数组
-        names.update(str(n).lower().rstrip(".")
-                     for n in (entry.get("dnsnames") or [entry.get("name")]) if n)
+
+    # Merge entries from all successful sources
+    all_names: set[str] = set()
+    for source, entries in results:
+        for entry in entries:
+            names.update(str(n).lower().rstrip(".")
+                         for n in (entry.get("dnsnames") or [entry.get("name")]) if n)
+    # Also add from the primary source's entries
     for name in sorted(names)[:200]:
         if not name or "*" in name:
             continue

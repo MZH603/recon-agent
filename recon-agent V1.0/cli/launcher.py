@@ -299,7 +299,8 @@ async def run_rich_setup(defaults, settings):
                     continue
             # getpass refuses accidental pipe entry by the checks above.
             key = getpass.getpass('API Key（留空沿用已有 Key）: ' if defaults.api_key else 'API Key: ')
-            authorized = input('确认已获本次目标合法授权？(yes/no): ').strip().lower() in ('yes', 'y', '确认')
+            target_val = values['target']
+            authorized = input(f'确认已获本次目标合法授权？\n请输入目标精确字符串 "{target_val}" 以确认: ').strip() == target_val
             result, errors = validate_setup(dict(type='configure', **{k: values[k] for k in ('api_base', 'model', 'target')},
                                                   api_key=key, authorized=authorized, **optional), defaults, settings)
             key = ''

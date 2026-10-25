@@ -30,7 +30,7 @@ def test_cross_host_redirect_is_rejected(location):
     handler = _SameHostRedirectHandler("example.com")
     request = urllib.request.Request("https://example.com/start")
 
-    with pytest.raises(urllib.error.HTTPError, match="Cross-host redirect blocked"):
+    with pytest.raises(urllib.error.HTTPError, match="Cross-origin redirect blocked"):
         handler.redirect_request(
             request, None, 302, "Found", email.message.Message(), location
         )

@@ -15,9 +15,22 @@ from utils.config import Settings, get_settings
 from utils.logger import audit, warn
 
 # HARD: 黑名单双保险之一——AST 层
-FORBIDDEN_MODULES = {"os", "sys", "shutil", "subprocess", "importlib", "ctypes", "requests"}
-FORBIDDEN_CALLS = {"eval", "exec", "compile", "__import__", "globals", "locals", "vars", "open"}
-FORBIDDEN_ATTR_CALLS = {"write_text", "write_bytes", "unlink", "rmdir", "mkdir", "rename", "replace", "chmod"}
+FORBIDDEN_MODULES = {
+    "os", "sys", "shutil", "subprocess", "importlib", "ctypes", "requests",
+    "ssl", "http", "urllib", "urllib3", "aiohttp", "httpx",
+    "ftplib", "telnetlib", "smtplib", "poplib", "imaplib", "nntplib",
+    "multiprocessing", "threading", "asyncio", "signal", "resource",
+    "pwd", "grp", "crypt", "termios", "tty", "pty", "select", "mmap",
+}
+FORBIDDEN_CALLS = {
+    "eval", "exec", "compile", "__import__", "globals", "locals", "vars", "open",
+    "getattr", "setattr", "delattr", "hasattr",
+    "importlib.import_module", "builtins.__import__",
+}
+FORBIDDEN_ATTR_CALLS = {
+    "write_text", "write_bytes", "unlink", "rmdir", "mkdir", "rename", "replace", "chmod",
+    "write", "writelines", "flush", "fileno",
+}
 WRITE_MODE_CHARS = {"w", "a", "x", "+"}
 
 
@@ -56,16 +69,24 @@ def validate_script(code: str) -> SandboxResult:
 
 def _check_call(node: ast.Call) -> str | None:
     """单条 Call 节点黑名单检查。"""
+    # 1) 直接调用：eval(), exec(), __import__() 等
     if isinstance(node.func, ast.Name):
         if node.func.id in FORBIDDEN_CALLS:
             return f"禁止调用 {node.func.id}()"
+    # 2) 属性调用：file.write(), path.write_text() 等
     if isinstance(node.func, ast.Attribute):
         if node.func.attr in FORBIDDEN_ATTR_CALLS:
-            return f"禁止调用 {node.func.attr}()（文件写/删除）"
+            return f"禁止调用 {node.func.attr}()（文件写/删除/句柄操作）"
         if node.func.attr in {"Request", "urlopen"}:
             for kw in node.keywords:  # HARD: 禁止网络外传（POST/data）
                 if kw.arg in {"data", "method"}:
                     return "禁止网络外传（POST/data）"
+        # 3) 链式调用：open(...).write(...)、pathlib.Path(...).write_text(...)
+        #    递归检查调用链的基础表达式
+        if isinstance(node.func.value, ast.Call):
+            inner_reason = _check_call(node.func.value)
+            if inner_reason:
+                return inner_reason
     return None
 
 

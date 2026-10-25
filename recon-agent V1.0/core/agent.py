@@ -97,7 +97,18 @@ class ReconAgent:
             self._metrics.incr("cache_hits")
             self._metrics.incr("dedup_hits")
             info(f"去重命中: {call.name} {call.arguments.get('target', '')}")
-            return ToolResult.err(call.name, reason)  # 复用提示以错误结果形态回注
+            # Return a successful cached result instead of an error to avoid confusing the model
+            return ToolResult(
+                name=call.name,
+                success=True,
+                data={'cached': True, 'skip_reason': reason},
+                evidence=['cache_hit'],
+                source_hash='',
+                confidence=1.0,
+                degraded=True,
+                status='success',
+                summary=f'去重命中: {reason}',
+            )
         min_level = self._tool_min_level(call.name)
         if not self._llm.guard.allows(min_level):  # HARD: 预算档位联动
             return ToolResult.err(call.name,

@@ -138,33 +138,41 @@ async def stage_l1(target: str, alive: list[str], registry, builder: ReportBuild
                    state: dict) -> int:
     hosts = [target] + [h for h in alive if h != target]
     section(f"Stage L1 · 隐蔽端口扫描（全部 {len(hosts)} 台存活资产）")
-    violations = 0
-    for index, host in enumerate(hosts, 1):
-        if host in state["port_map"] and state["port_map"][host] is not None:
-            builder.data.port_map[host] = state["port_map"][host]
-            info(f"[{index}/{len(hosts)}] {host} 已有端口面（续跑跳过）")
-            continue
-        started = time.monotonic()
-        result = await registry.execute(NormalizedToolCall(
-            id=f"fs-port-{host}", name="nmap_scan",
-            arguments={"target": host, "ports": MAIN_PORTS}))
-        elapsed = time.monotonic() - started
-        if not result.success:
-            err(f"{host}: {result.error[:100]}")
-            builder.add_note(f"端口扫描失败 {host}: {result.error[:120]}")
-            continue
-        data = result.data
-        attempts = len(data.get("open_ports", [])) + len(data.get("closed", [])) \
-            + (1 if data.get("stopped_early") else 0)
-        if elapsed < attempts * 3 - 1:
-            violations += 1
-            warn(f"{host}: 限速下界异常（{elapsed:.0f}s < {attempts * 3}s）")
-        builder.add_port_scan(host, result)
-        state["port_map"][host] = data.get("open_ports", [])
-        ok(f"[{index}/{len(hosts)}] {host}: {state['port_map'][host]} ({elapsed:.0f}s)"
-           + (" [失败即停]" if data.get("stopped_early") else ""))
-        save_state(target, state)
-    return violations
+
+    # 每主机并行，受各自レート限制器控制；整体并发由 MAX_CONCURRENCY / 每主机限速决定
+    # 使用信号量限制同时进行的主机数，避免超过总并发上限
+    concurrency = getattr(state, '_l1_concurrency', 1)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _scan_one(host: str, index: int) -> None:
+        async with sem:
+            if host in state["port_map"] and state["port_map"][host] is not None:
+                builder.data.port_map[host] = state["port_map"][host]
+                info(f"[{index}/{len(hosts)}] {host} 已有端口面（续跑跳过）")
+                return
+            started = time.monotonic()
+            result = await registry.execute(NormalizedToolCall(
+                id=f"fs-port-{host}", name="nmap_scan",
+                arguments={"target": host, "ports": MAIN_PORTS}))
+            elapsed = time.monotonic() - started
+            if not result.success:
+                err(f"{host}: {result.error[:100]}")
+                builder.add_note(f"端口扫描失败 {host}: {result.error[:120]}")
+                return
+            data = result.data
+            attempts = len(data.get("open_ports", [])) + len(data.get("closed", [])) \
+                + (1 if data.get("stopped_early") else 0)
+            if elapsed < attempts * 3 - 1:
+                warn(f"{host}: 限速下界异常（{elapsed:.0f}s < {attempts * 3}s）")
+            builder.add_port_scan(host, result)
+            state["port_map"][host] = data.get("open_ports", [])
+            ok(f"[{index}/{len(hosts)}] {host}: {state['port_map'][host]} ({elapsed:.0f}s)"
+               + (" [失败即停]" if data.get("stopped_early") else ""))
+            save_state(target, state)
+
+    tasks = [_scan_one(host, i + 1) for i, host in enumerate(hosts)]
+    await asyncio.gather(*tasks)
+    return 0
 
 
 async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuilder,

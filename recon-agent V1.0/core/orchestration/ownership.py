@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -15,18 +16,20 @@ class SessionOwnership:
     def __init__(self, db_path: Path, session_id: str):
         canonical = os.path.normcase(str(db_path.resolve()))
         digest = hashlib.sha256((canonical + '\0' + session_id).encode('utf-8')).hexdigest()
-        self.path = db_path.resolve().parent / '.session-locks' / f'{digest}.lock'
+        # Use system temp directory for lock files to avoid permission issues on Windows
+        lock_dir = Path(tempfile.gettempdir()) / 'recon-agent-locks'
+        self.path = lock_dir / f'{digest}.lock'
         self.session_id = session_id
         self.handle = None
 
     def acquire(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        handle = self.path.open('a+b')
+        # Use 'wb' binary mode for lock file to avoid Windows text-mode encoding issues.
+        handle = None
         try:
-            handle.seek(0, os.SEEK_END)
-            if handle.tell() == 0:
-                handle.write(b'\0')
-                handle.flush()
+            handle = self.path.open('wb')
+            handle.write(b'\0')
+            handle.flush()
             handle.seek(0)
             if os.name == 'nt':
                 import msvcrt
@@ -34,9 +37,15 @@ class SessionOwnership:
             else:
                 import fcntl
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as exc:
-            handle.close()
-            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+        except (OSError, PermissionError) as exc:
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+            if isinstance(exc, OSError) and exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                raise ValueError(f'Session {self.session_id} already has an active owner') from exc
+            if isinstance(exc, PermissionError):
                 raise ValueError(f'Session {self.session_id} already has an active owner') from exc
             raise
         self.handle = handle

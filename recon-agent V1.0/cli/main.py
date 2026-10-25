@@ -206,17 +206,6 @@ def run(
             return await full_cascade(
                 target=target, authorized=True, level=requested,
                 auto_confirm=auto_confirm, note=note, settings=settings)
-        # 关键策略变更：当请求 L1/L2 级别时，自动先执行 L0（被动测绘）
-        # - 交互模式：requested >= 1 时触发 full_cascade（L0→L1→L2 级联）
-        # - batch 模式：L1/L2 永久禁止（HARD），但仍确保 L0 基线执行
-        # - 任何模式下的扫描起点都是 L0，符合"高等级时默认自动进行低等级扫描"的策略
-        if requested >= 1 and not batch:
-            # 交互模式：请求高级别时自动执行全部低等级扫描（级联）
-            from scripts.full_scan import run as full_cascade
-
-            return await full_cascade(
-                target=target, authorized=True, level=requested,
-                auto_confirm=auto_confirm, note=note, settings=settings)
         # batch 模式或级别为 0：至少执行 L0（被动测绘），确保任何模式起点均为 L0
         return await pipeline.run_pipeline(
             target=target, settings=settings, batch=batch, is_tty=is_tty,
@@ -247,13 +236,16 @@ def _resolve_level(profile: str, level: int | None) -> int:
 
 
 async def _confirm_authorization(target: str, batch: bool, is_tty: bool) -> bool:
-    """交互授权确认（HARD：batch/无 TTY 且未 --authorized → 拒绝）。"""
+    """交互授权确认（HARD：batch/无 TTY 且未 --authorized → 拒绝）。
+
+    需输入目标精确字符串以防误确认/自动化绕过。
+    """
     if batch or not is_tty:
         return False
     answer = await asyncio.to_thread(
-        input, f"确认你已获得对 {target} 的合法书面授权并将遵守 RoE？(yes/no): "
+        input, f"确认你已获得对 {target} 的合法书面授权并将遵守 RoE？\n请输入目标精确字符串 \"{target}\" 以确认: "
     )
-    return answer.strip().lower() in ("yes", "y", "确认")
+    return answer.strip() == target
 
 
 if __name__ == "__main__":

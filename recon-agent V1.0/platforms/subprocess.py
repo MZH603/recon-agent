@@ -173,6 +173,7 @@ async def kill_and_reap(proc):
 async def run_command(
     args: list[str],
     timeout: float = 30,
+    max_bytes: int | None = None,
     input_data: str | None = None,
     cwd: Path | None = None,
 ) -> tuple[int, str, str]:
@@ -181,6 +182,7 @@ async def run_command(
     - 仅 exec 数组形式，不经过 shell（HARD）；
     - 超时强制 kill 并返回码 124；
     - 启动错误收敛为错误返回值；取消先回收进程再向上抛。
+    - max_bytes: 当 stdout 或 stderr 字节数超过此值时，仅保留前 max_bytes 字节并在结果末尾标注。
     """
     try:
         proc = await spawn_owned(
@@ -194,8 +196,20 @@ async def run_command(
         return 127, "", f"[spawn-failed] {exc}"
     captured = [bytearray(), bytearray()]
     async def drain(stream, index):
-        while chunk := await stream.read(65536):
-            captured[index].extend(chunk)
+        idx = captured[index]
+        while True:
+            chunk = await stream.read(65536)
+            if not chunk:
+                return
+            if max_bytes is not None:
+                # Track total bytes per stream
+                current_total = len(idx)
+                remaining = max_bytes - current_total
+                if remaining <= 0:
+                    # Already at/budget exceeded, discard further data
+                    continue
+                chunk = chunk[:min(len(chunk), remaining)]
+            idx.extend(chunk)
     async def feed():
         if input_data is not None:
             try:
@@ -211,19 +225,32 @@ async def run_command(
         done, pending = await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.ALL_COMPLETED)
         if pending:
             confirmed = await kill_and_reap(proc)
-            return 124, _decode(captured[0]), _decode(captured[1]) + f'\n[timeout] 命令超过 {timeout:g}s；' + ('进程树已终止' if confirmed else '进程树停止未确认；outcome unknown')
+            stdout_raw = bytes(captured[0])
+            stderr_raw = bytes(captured[1])
+            stdout_text = stdout_raw.decode('utf-8', errors='replace')
+            stderr_text = stderr_raw.decode('utf-8', errors='replace')
+            # Append truncation notice if we hit the limit
+            stdout_marker = '...[输出已截断]' if max_bytes is not None and len(stdout_raw) > max_bytes else ''
+            stderr_marker = '...[输出已截断]' if max_bytes is not None and len(stderr_raw) > max_bytes else ''
+            return 124, (stdout_text + stdout_marker), (stderr_text + stderr_marker) + '\n[timeout] 命令超过 {timeout:g}s；' + ('进程树已终止' if confirmed else '进程树停止未确认；outcome unknown')
         for task in done: task.result()
-        return proc.returncode or 0, _decode(captured[0]), _decode(captured[1])
+        stdout_raw = bytes(captured[0])
+        stderr_raw = bytes(captured[1])
+        stdout_text = stdout_raw.decode('utf-8', errors='replace')
+        stderr_text = stderr_raw.decode('utf-8', errors='replace')
+        # Post-hoc truncation notice
+        stdout_marker = '...[输出已截断]' if max_bytes is not None and len(stdout_raw) > max_bytes else ''
+        stderr_marker = '...[输出已截断]' if max_bytes is not None and len(stderr_raw) > max_bytes else ''
+        return proc.returncode or 0, (stdout_text + stdout_marker), (stderr_text + stderr_marker)
     except asyncio.CancelledError:
         from tools.runtime.execution_wait import partial_output
         partial = partial_output.get()
         if partial is not None:
             clean = partial.get('_redactor', lambda value: value)
-            partial.update(clean({'stdout': _decode(captured[0]), 'stderr': _decode(captured[1])}))
+            partial.update(clean({'stdout': bytes(captured[0]).decode('utf-8',errors='ignore'), 'stderr': bytes(captured[1]).decode('utf-8',errors='ignore')}))
         await kill_and_reap(proc)
         raise
     finally:
         for task in tasks:
             if not task.done(): task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         release_process(proc)

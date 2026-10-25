@@ -75,8 +75,9 @@ class FingerprintTool(BaseTool):
         assert isinstance(params, FingerprintParams)
         host, port, scheme_hint = split_target(params.target)
         netloc = f"{host}:{port}" if port else host
-        first_scheme = "http" if scheme_hint == "http" else "https"
         is_ip = _is_ip(host)
+        # IP 目标直接用 HTTP，避免证书不匹配导致的额外失败+延迟
+        first_scheme = "http" if (scheme_hint == "http" or is_ip) else "https"
         async with self._limiter.slot():
             status, headers, body = await run_sync(
                 self._fetch, f"{first_scheme}://{netloc}/", insecure=is_ip)

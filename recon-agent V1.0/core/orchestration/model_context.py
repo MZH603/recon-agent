@@ -145,6 +145,17 @@ def prepare_context(state, gate, guard, capacity, trigger_ratio=0.7, tools=None,
     # Do not repeatedly shrink a just-compacted working set on replay. A lower
     # current capacity may still require recovery even without a new tail.
     if before >= trigger and (cursor < len(original) or before > capacity):
+        # Pre-check: if even system+dynamic alone exceed capacity, signal limit
+        # instead of entering compaction loop that cannot succeed.
+        sys_dyn_size = size([])
+        if sys_dyn_size > capacity:
+            metrics.update(context_tokens=before,
+                           context_before_tokens=state.get('context_before_tokens', 0),
+                           context_saved_tokens=state.get('context_saved_tokens', 0),
+                           context_compactions=state.get('context_compactions', 0),
+                           context_compressed=False, context_limited=True,
+                           context_history=copy.deepcopy(systems + rest), context_cursor=len(original))
+            return request(rest), metrics
         groups = _groups(rest)
         protected = {len(groups)-1, len(groups)-2}
         protected.update(index for index, group in enumerate(groups)

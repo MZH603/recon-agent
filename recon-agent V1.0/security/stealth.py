@@ -94,6 +94,12 @@ def allowed_target(target: str, settings: Settings | None = None) -> tuple[bool,
         ip = ipaddress.ip_address(host)
         if ip.is_link_local:
             return False, "链路本地/云元数据地址绝对拒绝（HARD）"
+        # RFC1918 私有地址 + 环回 + 保留地址（二次防线，配合 ip.is_global）
+        for prefix in s.RFC1918_RANGES:
+            if str(ip).startswith(prefix):
+                if not s.LAB_MODE:
+                    return False, f"内网/保留地址（{prefix.rstrip('.')}）默认拒绝（自有实验环境请加 --lab）"
+                return True, "ok（lab 模式：自有实验目标）"
         if not ip.is_global:
             if not s.LAB_MODE:
                 return False, "内网/环回地址默认拒绝（自有实验环境请加 --lab）"
