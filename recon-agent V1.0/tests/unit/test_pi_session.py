@@ -387,8 +387,8 @@ def test_cli_ui_selection_keeps_original_tty_and_runner_api(monkeypatch,mode,tty
     async def rich(**kwargs):captured.append(('rich',kwargs));return 0
     async def pi(**kwargs):captured.append(('pi',kwargs));return 0
     monkeypatch.setattr('cli.session.run_session',rich)
-    monkeypatch.setattr('cli.pi_session.run_pi_session',pi)
-    monkeypatch.setattr('cli.pi_bridge.pi_available',lambda:(available,'fixture missing dependency'))
+    monkeypatch.setattr('cli.tui_session.run_tui_session',pi)
+    monkeypatch.setattr('cli.tui_bridge.tui_available',lambda:(available,'fixture missing dependency'))
     # CliRunner installs capture streams, so patch their classes during the command.
     import cli.main as main
     original=main._settings_with
@@ -402,7 +402,7 @@ def test_cli_ui_selection_keeps_original_tty_and_runner_api(monkeypatch,mode,tty
     if expected!='error':
         assert captured[0][0]==expected and captured[0][1]['is_tty'] is True
         assert 'auto_confirm' not in captured[0][1]
-    if not available:assert 'Pi' in result.output
+    if not available:assert 'TUI' in result.output
 
 
 @pytest.mark.parametrize('kind',[{},[],None,1],ids=['object','array','null','number'])
@@ -470,12 +470,21 @@ def test_slow_ui_queue_is_bounded_and_cancels_active_graph(tmp_path):
     asyncio.run(scenario())
 
 
-def test_installed_pi_probe_and_old_node_rejected(monkeypatch):
-    from cli.pi_bridge import pi_available
+def test_pi_probe_accepts_supported_node_and_rejects_old_node(tmp_path, monkeypatch):
+    from cli import pi_bridge
     from types import SimpleNamespace
-    assert pi_available()==(True,'')
-    monkeypatch.setattr('cli.pi_bridge.subprocess.run',lambda *args,**kwargs:SimpleNamespace(returncode=0,stdout='20.0.0'))
-    assert not pi_available()[0] and '22.19.0' in pi_available()[1]
+    package = tmp_path / 'node_modules/@earendil-works/pi-tui/package.json'
+    package.parent.mkdir(parents=True)
+    package.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(pi_bridge, 'PI_DIR', tmp_path)
+    monkeypatch.setattr(pi_bridge.shutil, 'which', lambda _: 'node')
+    monkeypatch.setattr(pi_bridge.subprocess, 'run', lambda *args, **kwargs:
+                    SimpleNamespace(returncode=0, stdout='22.19.0'))
+    assert pi_bridge.pi_available() == (True, '')
+    monkeypatch.setattr(pi_bridge.subprocess, 'run', lambda *args, **kwargs:
+                    SimpleNamespace(returncode=0, stdout='20.0.0'))
+    assert not pi_bridge.pi_available()[0]
+    assert '22.19.0' in pi_bridge.pi_available()[1]
 
 
 def test_authenticated_bridge_refuses_a_second_frontend_and_releases_port():

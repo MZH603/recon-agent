@@ -18,7 +18,13 @@ jobs:
         run: |
           pip install -e ".[dev]"
           pip install litellm
-      - name: Run tests
+      - name: Check duplicate definitions
+        run: ruff check .
+      - name: Run Python tests
         env:
           PYTHONIOENCODING: utf-8
         run: pytest tests -q
+      - name: Install TUI dependencies
+        run: npm ci --ignore-scripts --prefix cli/tui
+      - name: Run TUI tests
+        run: npm --prefix cli/tui test

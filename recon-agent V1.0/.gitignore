@@ -1,7 +1,8 @@
-.venv/
+.venv*/
 __pycache__/
 *.pyc
 reports/
 *.egg-info/
 .pytest_cache/
+.pytest_tmp/
 .ofa_env/

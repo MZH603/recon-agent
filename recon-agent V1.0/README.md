@@ -17,13 +17,13 @@ Python ≥ 3.10。核心依赖由 `pyproject.toml` 安装，包括 LiteLLM、Lan
 
 ```powershell
 python -m venv .venv
-.venv\Scripts\python -m pip install -e ".[dev]"
+& '.venv\Scripts\python.exe' -m pip install -e '.[dev]'
 # Linux 对应 .venv/bin/python
 
 # 裸启动：配置 API 根地址、模型、Key、目标，并确认本次授权
 recon-agent
 # Windows 仓库已有虚拟环境的入口（在项目目录）
-& '..\.venv\Scripts\recon-agent.exe'
+& '.venv\Scripts\recon-agent.exe'
 # 显式打开配置页，或者选择 Rich 隐藏 Key 的兼容输入
 recon-agent --auth --ui rich
 
@@ -60,7 +60,7 @@ Set-Location '.\recon-agent V1.0'
 $env:RECON_MODEL="openai/your-model"
 $env:RECON_API_BASE="https://your-endpoint.example/v1"
 $env:RECON_API_KEY="你的 Key"
-& '..\.venv\Scripts\recon-agent.exe' --session -t example.com --authorized -o reports --output-format markdown
+& '.venv\Scripts\recon-agent.exe' --session -t example.com --authorized -o reports --output-format markdown
 ```
 
 上例使用仓库根目录已有的 `.venv`。模型选择优先级为 `--model` > 非空 `RECON_MODEL` > YAML `name`。
@@ -219,7 +219,7 @@ MCP → existing external-agent tool bridge (L2 prohibited)
 受控扫描器、搜索、Caido 只读查询和工作记录已接入，配置与调用见 [扩展工具接入](docs/tool-extensions.md)。外部工具默认关闭。
 
 ```powershell
-& '../.venv/Scripts/python.exe' -m pytest tests -q
+& '.venv\Scripts\python.exe' -m pytest tests -q
 npm --prefix cli/tui test
 ```
 

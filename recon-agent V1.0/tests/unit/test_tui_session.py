@@ -493,12 +493,21 @@ def test_slow_ui_queue_is_bounded_and_cancels_active_graph(tmp_path):
     asyncio.run(scenario())
 
 
-def test_installed_pi_probe_and_old_node_rejected(monkeypatch):
-    from cli.tui_bridge import tui_available
+def test_tui_probe_accepts_supported_node_and_rejects_old_node(tmp_path, monkeypatch):
+    from cli import tui_bridge
     from types import SimpleNamespace
-    assert tui_available()==(True,'')
-    monkeypatch.setattr('cli.tui_bridge.subprocess.run',lambda *args,**kwargs:SimpleNamespace(returncode=0,stdout='20.0.0'))
-    assert not tui_available()[0] and '22.19.0' in tui_available()[1]
+    package = tmp_path / 'node_modules/@earendil-works/pi-tui/package.json'
+    package.parent.mkdir(parents=True)
+    package.write_text('{}', encoding='utf-8')
+    monkeypatch.setattr(tui_bridge, 'TUI_DIR', tmp_path)
+    monkeypatch.setattr(tui_bridge.shutil, 'which', lambda _: 'node')
+    monkeypatch.setattr(tui_bridge.subprocess, 'run', lambda *args, **kwargs:
+                    SimpleNamespace(returncode=0, stdout='22.19.0'))
+    assert tui_bridge.tui_available() == (True, '')
+    monkeypatch.setattr(tui_bridge.subprocess, 'run', lambda *args, **kwargs:
+                    SimpleNamespace(returncode=0, stdout='20.0.0'))
+    assert not tui_bridge.tui_available()[0]
+    assert '22.19.0' in tui_bridge.tui_available()[1]
 
 
 def test_authenticated_bridge_refuses_a_second_frontend_and_releases_port():

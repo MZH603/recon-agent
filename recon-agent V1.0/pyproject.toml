@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "bandit>=1.7"]
+dev = ["pytest>=8.0", "bandit>=1.7", "ruff>=0.6"]
 sandbox = ["bandit>=1.7"]
 
 [project.scripts]
@@ -34,6 +34,15 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# Keep the gate focused on defects that break runtime guarantees.
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# F811 catches duplicate definitions that can silently replace safety logic.
+select = ["F811"]
 
 [tool.setuptools.package-data]
 core = ["prompt_templates/*.md"]

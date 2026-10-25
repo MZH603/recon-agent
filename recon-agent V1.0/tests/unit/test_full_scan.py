@@ -11,9 +11,10 @@ def test_cascade_gate_level1_is_immediately_active():
     assert gate.current_level() == 1
 
 
-def test_cascade_gate_level2_requires_unlock():
+def test_cascade_gate_level2_requires_unlock(tmp_path):
     """level=2 初始被压到 L1，必须走三次解锁（HARD）。"""
     gate = make_cascade_gate("example.com", level=2, auto_confirm=True)
+    gate._auth_dir = tmp_path / "auth"
     assert gate.current_level() == 1
     ok1, _ = asyncio.run(gate.request_level_2_step(1))
     assert ok1

@@ -23,17 +23,6 @@ def optional_api_key(value: str | SecretStr | None) -> SecretStr | None:
     return SecretStr(value) if value.strip() else None
 
 
-def optional_api_key(value: str | SecretStr | None) -> SecretStr | None:
-    """Normalize blank credentials while keeping configured keys masked."""
-    if value is None:
-        return None
-    if isinstance(value, SecretStr):
-        return value if value.get_secret_value().strip() else None
-    if not isinstance(value, str):
-        raise ValueError("api_key must be a string")
-    return SecretStr(value) if value.strip() else None
-
-
 class ModelConfig(BaseModel):
     """模型接入配置：name 为任意 LiteLLM 支持的模型名，改配置即换模型（HARD：零代码改动）。"""
 
