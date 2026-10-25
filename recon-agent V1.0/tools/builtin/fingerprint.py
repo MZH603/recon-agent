@@ -1,6 +1,7 @@
 """builtin Web 指纹（L0 被动：单次只读 GET；Header/meta/路径三源识别 + 版本精确提取）。
 
 支持 target 带端口（如 127.0.0.1:8080），用于非标准端口与本地靶场。
+签名来源：tools/data/fingerprints.yaml（热加载，支持运行时更新）。
 """
 from __future__ import annotations
 
@@ -16,14 +17,7 @@ from pydantic import BaseModel, Field
 from security.stealth import StealthRateLimiter, normalize_host, random_user_agent
 from tools.base import BaseTool, ToolResult
 from tools.builtin.webfetch import http_get
-from tools.builtin.signatures import (
-    BODY_SIGNATURES,
-    HEADER_SIGNATURES,
-    SCRIPT_LIB_NAMES,
-    SCRIPT_VERSION_RE,
-    SECURITY_HEADER_SIGNATURES,
-    VERSION_HEADER_SIGNATURES,
-)
+from tools.builtin.fingerprint_loader import get_signatures, FingerprintSignatures
 from utils.config import Settings, get_settings
 
 
@@ -89,9 +83,13 @@ class FingerprintTool(BaseTool):
         if status == 0:
             return ToolResult.err(self.name, f"无法连接 {netloc}（失败不重试，HARD）")
         insecure_note = "，[证书校验跳过: IP 目标]" if is_ip and used_scheme == "https" else ""
+        
+        # Load fingerprint signatures (hot-reloadable)
+        sigs = get_signatures(self._settings)
+        
         findings: dict = {}
-        _apply_headers(headers, findings)
-        _apply_body(body, findings)
+        _apply_headers(headers, findings, sigs)
+        _apply_body(body, findings, sigs)
         robots, sitemap = await self._fetch_aux(netloc, used_scheme)
         card_confidence = max([f["confidence"] for f in findings.values()], default=0.5)
         card = {
@@ -129,24 +127,24 @@ class FingerprintTool(BaseTool):
         return robots[:10], sitemap
 
 
-def _apply_headers(headers: dict, findings: dict) -> None:
+def _apply_headers(headers: dict, findings: dict, sigs: FingerprintSignatures) -> None:
     """Header 签名匹配 + 版本提取 + 安全头存在性（大小写不敏感，来源强制标注）。"""
     headers_ci = {k.lower(): v for k, v in headers.items()}
-    for header, pattern, category, name, conf in HEADER_SIGNATURES:
+    for header, pattern, category, name, conf in sigs.header_signatures:
         value = headers_ci.get(header.lower()) or ""
         if value and re.search(pattern, value, re.I):
             _add(findings, category, name, conf, f"[来源: Header {header}]")
-    for header, pattern, category, name in VERSION_HEADER_SIGNATURES:
+    for header, pattern, category, name in sigs.version_header_signatures:
         value = headers_ci.get(header.lower()) or ""
         match = re.search(pattern, value, re.I)
         if match:
             _add(findings, category, name, 0.9, f"[来源: Header {header}]", version=match.group(1))
-    for header, name in SECURITY_HEADER_SIGNATURES:
+    for header, name in sigs.security_header_signatures:
         if headers_ci.get(header.lower()):
             _add(findings, "安全头", name, 1.0, f"[来源: Header {header} 存在]")
 
 
-def _apply_body(body: str, findings: dict) -> None:
+def _apply_body(body: str, findings: dict, sigs: FingerprintSignatures) -> None:
     """meta generator + 页面特征 + script 版本提取，来源标注 [来源: 页面]。"""
     generator = re.search(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)', body, re.I)
     if generator:
@@ -154,12 +152,14 @@ def _apply_body(body: str, findings: dict) -> None:
         version_match = re.search(r"(\d+\.\d+(?:\.\d+)*)", gen_text)
         _add(findings, "generator", gen_text, 0.8, "[来源: meta generator]",
              version=version_match.group(1) if version_match else "")
-    for pattern, category, name, conf in BODY_SIGNATURES:
+    for pattern, category, name, conf in sigs.body_signatures:
         if re.search(pattern, body, re.I):
             _add(findings, category, name, conf, "[来源: 页面特征]")
-    for match in SCRIPT_VERSION_RE.finditer(body):
-        _add(findings, "js库", SCRIPT_LIB_NAMES[match.group(1).lower()], 0.9,
-             "[来源: 页面 script 版本]", version=match.group(2))
+    for match in sigs.script_version_re.finditer(body):
+        lib_key = match.group(1).lower()
+        if lib_key in sigs.script_lib_names:
+            _add(findings, "js库", sigs.script_lib_names[lib_key], 0.9,
+                 "[来源: 页面 script 版本]", version=match.group(2))
 
 
 def _add(findings: dict, category: str, name: str, conf: float, source: str, version: str = "") -> None:

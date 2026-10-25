@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, SecretStr, field_validator
 
 from model.base import LLMProvider, LLMResponse, ModelUnavailable, PartialStreamError, StreamEvent, observe
 from model.litellm_adapter import LiteLLMAdapter
+from model.local_adapter import LocalModelAdapter
 from utils.config import Settings, get_settings, optional_api_key
 from utils.logger import warn
 
@@ -95,7 +96,10 @@ class FallbackProvider(LLMProvider):
 
 def build_provider(settings: Settings | None = None, override: str | None = None, *,
                    connection_override: ModelSpec | None = None) -> LLMProvider:
-    """构建 fallback 链；显式指定的凭据缺失时跳过该模型并报备。"""
+    """构建 fallback 链；显式指定的凭据缺失时跳过该模型并报备。
+    
+    支持本地模型：model 以 local/ 或 ollama/ 开头时使用 LocalModelAdapter。
+    """
     settings = settings or get_settings()
     chain = [connection_override if connection_override is not None else resolve_model(settings, override)]
     chain += [resolve_model(settings, fb, inherit_primary=False) for fb in settings.model.fallback]
@@ -108,16 +112,49 @@ def build_provider(settings: Settings | None = None, override: str | None = None
             note = "；不影响主模型连接配置" if index else ""
             warn(f"跳过{role} {spec.model}：环境变量 {spec.api_key_env} 未设置且未配置 api_key{note}")
             continue
-        providers.append(LiteLLMAdapter(
-            model=spec.model,
-            api_base=spec.api_base,
-            api_key_env=spec.api_key_env,
-            api_key=spec.api_key,
-            temperature=settings.model.temperature,
-            max_retries=settings.model.max_retries,
-            timeout=settings.model.timeout,
-        ))
+        
+        # Check if this is a local model
+        is_local = spec.model.startswith(("local/", "ollama/", "llamacpp/"))
+        
+        if is_local:
+            # Local model: use LocalModelAdapter
+            api_base = spec.api_base or "http://localhost:11434/v1"
+            api_key = spec.api_key.get_secret_value() if spec.api_key else "ollama"
+            
+            # Allow custom endpoint override via custom_endpoints
+            for ep in settings.model.custom_endpoints:
+                if ep.get("model") == spec.model or ep.get("name") == spec.model:
+                    if ep.get("api_base"):
+                        api_base = ep["api_base"]
+                    if ep.get("auto_start"):
+                        auto_start = ep.get("auto_start", False)
+                    if ep.get("start_cmd"):
+                        start_cmd = ep.get("start_cmd")
+                    break
+            
+            providers.append(LocalModelAdapter(
+                model=spec.model.replace("local/", "").replace("ollama/", "").replace("llamacpp/", ""),
+                api_base=api_base,
+                api_key=api_key,
+                temperature=settings.model.temperature,
+                max_retries=settings.model.max_retries,
+                timeout=settings.model.timeout,
+                auto_start=ep.get("auto_start", False) if 'ep' in locals() else False,
+                start_cmd=ep.get("start_cmd", "") if 'ep' in locals() else "",
+            ))
+        else:
+            # Remote model via LiteLLM
+            providers.append(LiteLLMAdapter(
+                model=spec.model,
+                api_base=spec.api_base,
+                api_key_env=spec.api_key_env,
+                api_key=spec.api_key,
+                temperature=settings.model.temperature,
+                max_retries=settings.model.max_retries,
+                timeout=settings.model.timeout,
+            ))
         names.append(spec.model)
+    
     if not providers:
         raise ModelUnavailable("无可用模型：请配置 api_key、API Key 环境变量或本地端点（离线仍可出模板报告）")
     return FallbackProvider(providers, names)

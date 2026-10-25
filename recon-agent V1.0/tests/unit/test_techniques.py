@@ -1,7 +1,9 @@
 """插件架构 + 签名扩容测试。"""
 from tools.builtin.fingerprint import _apply_body
+from tools.builtin.fingerprint_loader import get_signatures
 from tools.deep_fingerprint import DeepFingerprintParams
 from tools.techniques import REGISTRY
+from utils.config import Settings
 
 
 def test_plugin_registry_discovery():
@@ -36,11 +38,12 @@ def test_js_inventory_plugin_extracts_version():
 
 def test_fingerprint_detects_education_oa_and_editor():
     findings: dict = {}
-    _apply_body("<title>正方教务管理系统</title><script src='ueditor.config.js'>", findings)
+    sigs = get_signatures(Settings())
+    _apply_body("<title>正方教务管理系统</title><script src='ueditor.config.js'>", findings, sigs)
     assert findings["system"]["name"] == "正方教务系统"
     assert findings["component"]["name"] == "UEditor"
     oa: dict = {}
-    _apply_body("<title>e-cology</title>", oa)
+    _apply_body("<title>e-cology</title>", oa, sigs)
     assert oa["system"]["name"] == "泛微OA"
 
 

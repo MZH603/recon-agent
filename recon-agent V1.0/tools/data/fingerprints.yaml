@@ -1,0 +1,436 @@
+# Fingerprint Signatures Database
+# Externalized from tools/builtin/signatures.py for hot-reload and community maintenance
+# Format compatible with WhatWeb / Nuclei / Wappalyzer
+
+header_signatures:
+  # (header_name, value_regex, category, name, confidence)
+  - header: "Server"
+    regex: 'nginx'
+    category: "server"
+    name: "Nginx"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'apache(?!-coyote)'
+    category: "server"
+    name: "Apache"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'microsoft-iis'
+    category: "server"
+    name: "IIS"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'tengine'
+    category: "server"
+    name: "OpenResty/Tengine"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'cloudflare'
+    category: "cdn"
+    name: "Cloudflare"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'tomcat|coyote'
+    category: "middleware"
+    name: "Tomcat"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'weblogic'
+    category: "middleware"
+    name: "WebLogic"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'websphere'
+    category: "middleware"
+    name: "WebSphere"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'jetty'
+    category: "middleware"
+    name: "Jetty"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'jboss|wildfly'
+    category: "middleware"
+    name: "JBoss/WildFly"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'kestrel'
+    category: "middleware"
+    name: "Kestrel(.NET)"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'uvicorn'
+    category: "middleware"
+    name: "uvicorn(Python)"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'gunicorn'
+    category: "middleware"
+    name: "gunicorn(Python)"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'undertow'
+    category: "middleware"
+    name: "Undertow(Java)"
+    confidence: 0.9
+  - header: "X-Powered-By"
+    regex: 'servlet|jsp'
+    category: "middleware"
+    name: "Tomcat/Servlet容器"
+    confidence: 0.8
+  - header: "Set-Cookie"
+    regex: 'jsessionid'
+    category: "middleware"
+    name: "Java应用容器"
+    confidence: 0.6
+  - header: "X-Powered-By"
+    regex: 'php/([\d\.]+)'
+    category: "language"
+    name: "PHP"
+    confidence: 0.9
+  - header: "X-Powered-By"
+    regex: 'asp\.net'
+    category: "framework"
+    name: "ASP.NET"
+    confidence: 0.9
+  - header: "X-Powered-By"
+    regex: 'express'
+    category: "framework"
+    name: "Express"
+    confidence: 0.9
+  - header: "X-Powered-By"
+    regex: 'thinkphp'
+    category: "framework"
+    name: "ThinkPHP"
+    confidence: 0.9
+  - header: "Set-Cookie"
+    regex: 'phpsessid'
+    category: "language"
+    name: "PHP"
+    confidence: 0.7
+  - header: "Set-Cookie"
+    regex: 'jsessionid'
+    category: "language"
+    name: "Java"
+    confidence: 0.7
+  - header: "Set-Cookie"
+    regex: 'asp\.net_sessionid'
+    category: "language"
+    name: "ASP.NET"
+    confidence: 0.7
+  - header: "Set-Cookie"
+    regex: 'laravel_session'
+    category: "framework"
+    name: "Laravel"
+    confidence: 0.8
+  - header: "Set-Cookie"
+    regex: 'csrftoken'
+    category: "framework"
+    name: "Django"
+    confidence: 0.7
+  - header: "Set-Cookie"
+    regex: '\bsessionid'
+    category: "framework"
+    name: "Django/Python"
+    confidence: 0.5
+  - header: "Set-Cookie"
+    regex: '_rails|_session_id='
+    category: "framework"
+    name: "Ruby on Rails"
+    confidence: 0.6
+  - header: "Set-Cookie"
+    regex: 'flask|werkzeug'
+    category: "framework"
+    name: "Flask"
+    confidence: 0.7
+  - header: "X-Application-Context"
+    regex: '.'
+    category: "framework"
+    name: "Spring Boot"
+    confidence: 0.9
+  - header: "Set-Cookie"
+    regex: 'cf_ray'
+    category: "cdn"
+    name: "Cloudflare"
+    confidence: 0.8
+  - header: "cf-ray"
+    regex: '.'
+    category: "cdn"
+    name: "Cloudflare"
+    confidence: 0.9
+  - header: "X-Sucuri-ID"
+    regex: '.'
+    category: "waf"
+    name: "Sucuri WAF"
+    confidence: 0.9
+  - header: "X-WAF"
+    regex: '.'
+    category: "waf"
+    name: "WAF(未识别类型)"
+    confidence: 0.5
+  - header: "Via"
+    regex: 'varnish'
+    category: "server"
+    name: "Varnish"
+    confidence: 0.8
+  - header: "X-Redirect-By"
+    regex: 'wordpress'
+    category: "cms"
+    name: "WordPress"
+    confidence: 0.95
+  - header: "X-Drupal-Cache"
+    regex: '.'
+    category: "cms"
+    name: "Drupal"
+    confidence: 0.95
+  - header: "X-Generator"
+    regex: 'drupal'
+    category: "cms"
+    name: "Drupal"
+    confidence: 0.9
+  - header: "X-AspNet-Version"
+    regex: '([\d\.]+)'
+    category: "framework"
+    name: "ASP.NET"
+    confidence: 0.9
+  - header: "X-Served-By"
+    regex: 'cache-'
+    category: "cdn"
+    name: "Fastly"
+    confidence: 0.8
+  - header: "X-Amz-Cf-Id"
+    regex: '.'
+    category: "cdn"
+    name: "CloudFront"
+    confidence: 0.85
+  - header: "X-GitHub-Request-Id"
+    regex: '.'
+    category: "hosting"
+    name: "GitHub Pages"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'openresty'
+    category: "server"
+    name: "OpenResty"
+    confidence: 0.9
+  - header: "Server"
+    regex: 'caddy'
+    category: "server"
+    name: "Caddy"
+    confidence: 0.9
+
+version_header_signatures:
+  # (header_name, version_regex, category, name)
+  - header: "Server"
+    regex: 'nginx/([\d\.]+)'
+    category: "server"
+    name: "Nginx"
+  - header: "Server"
+    regex: 'apache/([\d\.]+)'
+    category: "server"
+    name: "Apache"
+  - header: "X-Powered-By"
+    regex: 'php/([\d\.]+)'
+    category: "language"
+    name: "PHP"
+
+body_signatures:
+  # (pattern, category, name, confidence)
+  - pattern: 'wp-content|wp-includes'
+    category: "cms"
+    name: "WordPress"
+    confidence: 0.85
+  - pattern: '/sites/default/files'
+    category: "cms"
+    name: "Drupal"
+    confidence: 0.85
+  - pattern: 'Joomla!'
+    category: "cms"
+    name: "Joomla"
+    confidence: 0.85
+  - pattern: 'typecho'
+    category: "cms"
+    name: "Typecho"
+    confidence: 0.85
+  - pattern: 'powered by discuz|discuz!'
+    category: "cms"
+    name: "Discuz!"
+    confidence: 0.85
+  - pattern: 'dedecms'
+    category: "cms"
+    name: "DedeCMS"
+    confidence: 0.85
+  - pattern: 'empirecms|phome'
+    category: "cms"
+    name: "EmpireCMS"
+    confidence: 0.75
+  - pattern: 'phpcms'
+    category: "cms"
+    name: "PHPCMS"
+    confidence: 0.85
+  - pattern: 'metinfo'
+    category: "cms"
+    name: "MetInfo"
+    confidence: 0.8
+  - pattern: 'ghost-url'
+    category: "cms"
+    name: "Ghost"
+    confidence: 0.85
+  - pattern: 'hexo'
+    category: "cms"
+    name: "Hexo"
+    confidence: 0.7
+  - pattern: 'thinkphp'
+    category: "framework"
+    name: "ThinkPHP"
+    confidence: 0.7
+  - pattern: 'whitelabel error page'
+    category: "framework"
+    name: "Spring Boot"
+    confidence: 0.85
+  - pattern: '__NEXT_DATA__'
+    category: "frontend"
+    name: "Next.js"
+    confidence: 0.85
+  - pattern: 'data-v-[0-9a-f]{8}'
+    category: "frontend"
+    name: "Vue"
+    confidence: 0.7
+  - pattern: 'ng-version='
+    category: "frontend"
+    name: "Angular"
+    confidence: 0.85
+  - pattern: 'element-ui|element-plus'
+    category: "frontend"
+    name: "Element UI(Vue)"
+    confidence: 0.8
+  - pattern: 'ant-design|antd'
+    category: "frontend"
+    name: "Ant Design(React)"
+    confidence: 0.8
+  - pattern: 'layui'
+    category: "frontend"
+    name: "Layui"
+    confidence: 0.8
+  - pattern: 'bootstrap'
+    category: "frontend"
+    name: "Bootstrap"
+    confidence: 0.7
+  - pattern: 'jquery'
+    category: "js库"
+    name: "jQuery"
+    confidence: 0.8
+  - pattern: 'webpack'
+    category: "frontend"
+    name: "Webpack"
+    confidence: 0.6
+  # 国内高校/政企常见系统与组件
+  - pattern: '正方教务|zfsoft|zf_soft'
+    category: "system"
+    name: "正方教务系统"
+    confidence: 0.9
+  - pattern: '强智科技|强智教务|qzsoft'
+    category: "system"
+    name: "强智教务"
+    confidence: 0.9
+  - pattern: '青果教务|青果|qingguo'
+    category: "system"
+    name: "青果教务"
+    confidence: 0.85
+  - pattern: '超星|chaoxing|fanya\.chaoxing|学习通'
+    category: "system"
+    name: "超星学习通"
+    confidence: 0.85
+  - pattern: '雨课堂'
+    category: "system"
+    name: "雨课堂"
+    confidence: 0.85
+  - pattern: 'webvpn|easyconn'
+    category: "system"
+    name: "深澜/WebVPN"
+    confidence: 0.7
+  - pattern: '致远oa|seeyon'
+    category: "system"
+    name: "致远OA"
+    confidence: 0.9
+  - pattern: '泛微|weaver|e-cology'
+    category: "system"
+    name: "泛微OA"
+    confidence: 0.9
+  - pattern: '蓝凌|landray'
+    category: "system"
+    name: "蓝凌OA"
+    confidence: 0.9
+  - pattern: '通达oa|tongda'
+    category: "system"
+    name: "通达OA"
+    confidence: 0.85
+  - pattern: '金和oa|jhsoft'
+    category: "system"
+    name: "金和OA"
+    confidence: 0.85
+  - pattern: '宝塔面板|bt\.cn|btpanel'
+    category: "system"
+    name: "宝塔面板"
+    confidence: 0.85
+  - pattern: 'ueditor'
+    category: "component"
+    name: "UEditor"
+    confidence: 0.8
+  - pattern: 'kindeditor'
+    category: "component"
+    name: "KindEditor"
+    confidence: 0.8
+  - pattern: 'webuploader'
+    category: "component"
+    name: "WebUploader"
+    confidence: 0.75
+  - pattern: 'echarts'
+    category: "js库"
+    name: "ECharts"
+    confidence: 0.8
+  - pattern: 'swiper'
+    category: "js库"
+    name: "Swiper"
+    confidence: 0.75
+  - pattern: 'layer\.(js|open)'
+    category: "js库"
+    name: "Layer"
+    confidence: 0.75
+  - pattern: 'react-dom|data-reactroot'
+    category: "frontend"
+    name: "React"
+    confidence: 0.8
+  - pattern: 'vue(\.min|\.runtime)?\.js'
+    category: "frontend"
+    name: "Vue"
+    confidence: 0.85
+
+security_header_signatures:
+  - header: "X-Frame-Options"
+    name: "X-Frame-Options"
+  - header: "Strict-Transport-Security"
+    name: "HSTS"
+  - header: "Content-Security-Policy"
+    name: "CSP"
+  - header: "X-Content-Type-Options"
+    name: "X-Content-Type-Options"
+
+script_lib_names:
+  jquery: "jQuery"
+  bootstrap: "Bootstrap"
+  layui: "Layui"
+  angular: "Angular"
+  vue: "Vue"
+  react: "React"
+  echarts: "ECharts"
+  swiper: "Swiper"
+
+script_version_regex: '(jquery|bootstrap|layui|angular|vue|react|echarts|swiper)[\-\.]v?(\d+\.\d+(?:\.\d+)?)'
+
+# Additional metadata
+meta:
+  version: "1.0.0"
+  updated: "2026-10-25"
+  source: "recon-agent internal + community"

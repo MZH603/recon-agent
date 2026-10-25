@@ -4,6 +4,13 @@
 
 **工具优先原则**：遇到扫描或分析问题，优先使用对应内置工具（dns_query→fingerprint→port_scan→dir_enum），无工具时再编写一次性脚本。仅用于已获合法授权的目标。L0 是受控采集级别；HTTP 指纹、探活和证书 SAN 查询可能向远端发请求，不能理解为全部纯被动。
 
+**核心能力（V1.0 新增）**：
+- **Nuclei 兼容模板验证引擎**：内置/自定义 YAML 模板，单次 GET/HEAD，匹配器支持 status/word/regex，离线验证零网络
+- **8 大威胁情报数据源聚合**：FOFA、Quake、ZoomEye、微步在线、ThreatBook、Shodan、Censys、BinaryEdge，统一接口并发查询
+- **外部化指纹库**：`tools/data/fingerprints.yaml` 热加载，兼容 WhatWeb/Nuclei/Wappalyzer 格式，社区可维护
+- **Headless Chrome 爬虫**：Playwright 驱动，SPA 渲染、JS 执行、表单提交、API 端点发现、链接/邮箱/注释提取
+- **本地模型零网络推理**：Ollama / LM Studio / llama.cpp server，`local/llama3:8b`、`ollama/qwen2.5:7b` 即插即用
+
 [项目架构](docs/architecture.md) · [扩展工具接入](docs/tool-integrations.md) · [使用说明书](docs/使用说明书.md) · [项目说明书](docs/项目说明书.md) · [知识骨架](docs/知识骨架.md)
 
 ## 安装与启动

@@ -22,5 +22,16 @@ def test_yaml_override(tmp_path):
 
 def test_no_api_key_field_on_global_settings():
     # 凭据属于嵌套模型配置，不是全局运行常量。
+    # 外部数据源 API Keys 除外（它们是数据源凭据，非模型凭据）
     fields = Settings.model_fields.keys()
-    assert not any("key" in f.lower() for f in fields)
+    main_model_keys = [f for f in fields if "key" in f.lower() and f not in (
+        "FOFA_API_KEY", "FOFA_API_SECRET",
+        "QUAKE_API_KEY", "QUAKE_API_SECRET",
+        "ZOOMEYE_API_KEY", "ZOOMEYE_API_SECRET",
+        "WEIBU_API_KEY", "WEIBU_API_SECRET",
+        "THREATBOOK_API_KEY", "THREATBOOK_API_SECRET",
+        "SHODAN_API_KEY", "SHODAN_API_SECRET",
+        "CENSYS_API_KEY", "CENSYS_API_SECRET",
+        "BINARYEDGE_API_KEY", "BINARYEDGE_API_SECRET",
+    )]
+    assert not main_model_keys, f"Found main model key fields on global settings: {main_model_keys}"

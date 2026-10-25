@@ -19,6 +19,8 @@ from tools.builtin.subdomain_enum import SubdomainEnumTool
 from tools.builtin.system_scan import SystemScanTool
 from tools.builtin.takeover_check import TakeoverCheckTool
 from tools.builtin.wayback_urls import WaybackTool
+from tools.builtin.datasource_query import DataSourceQueryTool
+from tools.builtin.web_crawler import WebCrawlerTool
 from utils.config import Settings
 from utils.logger import audit
 
@@ -168,6 +170,8 @@ def build_default(settings: Settings, gate: ScanGate, main_target: str, *, sessi
     registry.register(TakeoverCheckTool(settings))  # L0：子域接管候选
     registry.register(WaybackTool(settings))        # L0：历史端点
     registry.register(SystemScanTool(settings))     # L2：系统安全工具网关
+    registry.register(DataSourceQueryTool(settings))  # L0：外部威胁情报数据源聚合查询
+    registry.register(WebCrawlerTool(settings))     # L2：Headless Chrome 爬虫
     from tools.builtin.api_recon import ApiReconTool
     from tools.adapters.custom import build_custom_tools
     from tools.adapters.mcp_tools import build_mcp_tools

@@ -2,8 +2,11 @@
 import pytest
 
 from tools.builtin.fingerprint import _apply_body, _apply_headers
+from tools.builtin.fingerprint_loader import get_signatures
 from tools.subdomain_enum import MAX_HOSTS_CAP, SubdomainParams, filter_scope
 from pydantic import ValidationError
+
+from utils.config import Settings
 
 
 def test_filter_scope_keeps_only_in_scope():
@@ -31,9 +34,11 @@ def test_prefix_wordlist_and_host_cap_bounded():
 
 def test_fingerprint_middleware_detection():
     findings: dict = {}
+    sigs = get_signatures(Settings())
     _apply_headers(
         {"Server": "Apache-Coyote/1.1", "Set-Cookie": "JSESSIONID=abc123; Path=/"},
         findings,
+        sigs,
     )
     assert findings["middleware"]["name"] == "Tomcat"          # Coyote → Tomcat
     assert findings["language"]["name"] == "Java"              # JSESSIONID
@@ -43,14 +48,15 @@ def test_fingerprint_middleware_detection():
 
 def test_fingerprint_framework_and_cms_detection():
     findings: dict = {}
-    _apply_headers({"Set-Cookie": "csrftoken=xyz"}, findings)
-    _apply_headers({"X-Application-Context": "application:prod:8080"}, findings)
+    sigs = get_signatures(Settings())
+    _apply_headers({"Set-Cookie": "csrftoken=xyz"}, findings, sigs)
+    _apply_headers({"X-Application-Context": "application:prod:8080"}, findings, sigs)
     # HARD: 双来源框架信号 → 保留双方（alternatives），交矛盾检测，不二选一
     names = {findings["framework"]["name"]} | {
         a["name"] for a in findings["framework"].get("alternatives", [])
     }
     assert names == {"Django", "Spring Boot"}
     body = '<meta name="generator" content="Discuz! X3.4">powered by discuz'
-    _apply_body(body, findings)
+    _apply_body(body, findings, sigs)
     assert findings["cms"]["name"] == "Discuz!"
     assert findings["generator"]["name"] == "Discuz! X3.4"

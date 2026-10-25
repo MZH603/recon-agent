@@ -24,7 +24,14 @@ def optional_api_key(value: str | SecretStr | None) -> SecretStr | None:
 
 
 class ModelConfig(BaseModel):
-    """模型接入配置：name 为任意 LiteLLM 支持的模型名，改配置即换模型（HARD：零代码改动）。"""
+    """模型接入配置：name 为任意 LiteLLM 支持的模型名，改配置即换模型（HARD：零代码改动）。
+
+    本地模型：model 以 local/、ollama/ 或 llamacpp/ 开头
+    示例：
+      - local/llama3:8b (LM Studio / llama.cpp server)
+      - ollama/qwen2.5:7b (Ollama)
+      - llamacpp/mistral-7b-instruct (llama.cpp server)
+    """
 
     model_config = ConfigDict(validate_assignment=True)
 
@@ -138,6 +145,24 @@ class Settings(BaseModel):
     EVIDENCE_REQUIRED: bool = True         # 强制证据绑定
     SOURCE_HASH_ENABLED: bool = True
     CONSISTENCY_CHECK_BLOCKS_REPORT: bool = False  # CI 下可开启
+
+    # ---- 外部数据源 API Keys ----
+    FOFA_API_KEY: str = ""
+    FOFA_API_SECRET: str = ""
+    QUAKE_API_KEY: str = ""
+    QUAKE_API_SECRET: str = ""
+    ZOOMEYE_API_KEY: str = ""
+    ZOOMEYE_API_SECRET: str = ""
+    WEIBU_API_KEY: str = ""
+    WEIBU_API_SECRET: str = ""
+    THREATBOOK_API_KEY: str = ""
+    THREATBOOK_API_SECRET: str = ""
+    SHODAN_API_KEY: str = ""
+    SHODAN_API_SECRET: str = ""
+    CENSYS_API_KEY: str = ""
+    CENSYS_API_SECRET: str = ""
+    BINARYEDGE_API_KEY: str = ""
+    BINARYEDGE_API_SECRET: str = ""
 
     @classmethod
     def load(cls, config_path: Path | None = None) -> "Settings":
