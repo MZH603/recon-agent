@@ -101,38 +101,56 @@ async def _crtsh_subdomains(domain: str, settings: Settings) -> dict:
     used_source = ""
 
     async def fetch_one(source: str, template: str) -> tuple[str, list[dict]]:
-        try:
-            raw = await run_sync(_http_get, template.format(domain=domain), 30)
-            entries = json.loads(raw)
-            return source, entries
-        except (OSError, json.JSONDecodeError, ValueError):
-            return source, []
+        # HARD: CT 为第三方情报源（非目标业务端口）。crt.sh 高负载时偶发 404/超时，
+        # 仅对传输层异常做有界礼貌重试（≤3 次，退避 3-5s，单请求串行）；
+        # HTTP 成功但业务为空按真实结果返回，不重试（保持“显式失败不重试”语义）。
+        for attempt in range(3):
+            try:
+                raw = await run_sync(_http_get, template.format(domain=domain), 30)
+                entries = json.loads(raw)
+                return source, (entries if isinstance(entries, list) else [])
+            except (OSError, json.JSONDecodeError, ValueError):
+                if attempt < 2:
+                    await asyncio.sleep(3 + attempt)
+        return source, []
 
     results = await asyncio.gather(
-        *_((src, tpl) for src, tpl in CT_SOURCES)
+        *(fetch_one(src, tpl) for src, tpl in CT_SOURCES)
     )
     for source, entries in results:
-        if not used_source:
-            used_source = source
-            break
-        # If the first source failed (empty entries but no exception), still try next
-        if not entries and not used_source:
+        if entries:  # HARD: 选第一个真正返回数据的源（原逻辑首个源恒 break，空结果误判为成功）
             used_source = source
             break
 
     if not used_source:
+        used_source = CT_SOURCES[0][0]
         out["notes"].append(
-            "全部 CT 源不可达，子域枚举降级为空；可安装 subfinder 提升召回率"
+            "CT 源均返回空（限频/无证书）；子域枚举降级，可加被动 DNS 源提升召回率"
         )
-        return out
 
     # Merge entries from all successful sources
-    all_names: set[str] = set()
+    # HARD: field-name contract — crt.sh returns name_value (newline-separated) +
+    # common_name; certspotter (expand=dnsnames) returns dnsnames[]. Read all of them.
+    def _extract_names(entry: dict) -> list[str]:
+        raw: list[str] = []
+        dn = entry.get("dnsnames")
+        if isinstance(dn, list):
+            raw += [str(x) for x in dn]
+        nv = entry.get("name_value")
+        if isinstance(nv, str):
+            raw += nv.splitlines()
+        for key in ("common_name", "name"):
+            val = entry.get(key)
+            if isinstance(val, str):
+                raw.append(val)
+        return raw
+
     for source, entries in results:
         for entry in entries:
-            names.update(str(n).lower().rstrip(".")
-                         for n in (entry.get("dnsnames") or [entry.get("name")]) if n)
-    # Also add from the primary source's entries
+            if isinstance(entry, dict):
+                names.update(str(n).strip().lower().rstrip(".")
+                             for n in _extract_names(entry) if n)
+    # Scope-split every extracted name across all CT sources
     for name in sorted(names)[:200]:
         if not name or "*" in name:
             continue
