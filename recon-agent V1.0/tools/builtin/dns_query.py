@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from security.stealth import StealthRateLimiter, random_user_agent
+from security.stealth import StealthRateLimiter
 from tools.base import BaseTool, ToolResult
 from utils.config import Settings, get_settings
 
@@ -69,9 +69,15 @@ class DNSQueryTool(BaseTool):
         )
 
     def _doh_fetch(self, name: str, rtype: str) -> tuple[str, str]:
-        """同步 DoH 请求（线程池中执行）：最近成功的解析器优先（性能优化）。"""
+        """同步 DoH 请求（线程池中执行）：最近成功的解析器优先（性能优化）。
+
+        匿名层：DoH 请求同样经统一出口（egress）—— 匿名启用时 DoH 自身走代理，
+        防止本地直接查询 DoH 服务暴露「正在解析该目标」的意图。
+        """
         import tools.builtin.dns_query as _mod
 
+        from security.anonymity.egress import AnonymityRequiredError, build_opener
+        from security.anonymity.fingerprint import request_headers
         last_exc: Exception | None = None
         order = sorted(DOH_RESOLVERS, key=lambda r: r[0] != _mod._LAST_GOOD_RESOLVER)
         for resolver, base in order:
@@ -79,12 +85,14 @@ class DNSQueryTool(BaseTool):
                 target_url = f"{base}?name={name}&type={RTYPE_CODES.get(rtype, 1)}"
                 if not target_url.startswith(("http://", "https://")):  # HARD: 仅 http(s)
                     raise ValueError(f"仅允许 http(s) URL: {target_url[:60]}")
-                req = urllib.request.Request(
-                    target_url, headers={"User-Agent": random_user_agent()},
-                )
-                with urllib.request.urlopen(req, timeout=self._settings.CONNECT_TIMEOUT) as resp:
+                req = urllib.request.Request(target_url, headers=request_headers())
+                opener = build_opener()  # 匿名启用=经出口；未启用=直连（历史行为）
+                with opener.open(req, timeout=self._settings.CONNECT_TIMEOUT) as resp:
                     _mod._LAST_GOOD_RESOLVER = resolver
                     return resp.read().decode("utf-8", errors="replace"), resolver
+            except AnonymityRequiredError:
+                # HARD: kill-switch 拒绝出站 → 换解析器无意义，立即中止（绝不直连重试）
+                raise
             except (OSError, ValueError) as exc:
                 last_exc = exc
         raise last_exc if last_exc else OSError("无可用 DoH 解析器")

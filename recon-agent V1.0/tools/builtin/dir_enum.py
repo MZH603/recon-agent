@@ -14,8 +14,9 @@ import urllib.request
 
 from pydantic import BaseModel, Field, field_validator
 
-from security.http_scope import urlopen_same_host
-from security.stealth import StealthRateLimiter, normalize_host, random_user_agent
+from security.anonymity.egress import urlopen_same_origin
+from security.anonymity.fingerprint import request_headers
+from security.stealth import StealthRateLimiter, normalize_host
 from tools.base import BaseTool, ToolResult
 from tools.builtin.fingerprint import split_target
 from tools.builtin.leak_signatures import (
@@ -127,8 +128,8 @@ class DirEnumTool(BaseTool):
     def _get_response(self, url: str) -> tuple[int, str]:
         """单次只读 GET：返回 (HTTP 状态码, 响应体前 100KB)；**-1 = 连接层失败**（哨兵）。"""
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": random_user_agent()})
-            with urlopen_same_host(req, timeout=self._settings.CONNECT_TIMEOUT) as resp:
+            req = urllib.request.Request(url, headers=request_headers())
+            with urlopen_same_origin(req, timeout=self._settings.CONNECT_TIMEOUT) as resp:
                 return resp.status, resp.read(100_000).decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             try:

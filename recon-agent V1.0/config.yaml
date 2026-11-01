@@ -1,6 +1,28 @@
 # recon-agent 默认配置（HARD：所有阈值集中在 utils/config.py，此处仅模型与运行覆盖项）
 CONTEXT_BUDGET: 100000         # 当前请求上下文容量，不是累计 token 预算
 COMPACT_TRIGGER_RATIO: 0.70   # 达到约 70000 tokens 自动压缩
+
+# ---- 匿名层（HARD：默认关闭；enabled=false 时行为与历史版本完全一致）----
+# 取消注释并按需修改即可启用；结构定义见 security/anonymity/config.py。
+# anonymity:
+#   enabled: false            # 总开关；CLI 可用 --anon 临时开启
+#   mode: pool                # single=固定单出口 | pool=多出口轮换 | tor=本机 Tor
+#   rotation: sticky          # sticky=同目标固定出口防抖动指纹 | round_robin | random
+#   kill_switch: true         # HARD：启用匿名但无健康出口 → 拒绝出站（fail closed）
+#   proxies:                  # 手工代理池（HTTP/HTTPS/SOCKS5；支持 user:pass@）
+#     - url: "socks5://127.0.0.1:1080"
+#       tag: "home-relay"
+#       region: "CN"
+#     - url: "http://user:pass@proxy.example.com:8080"   # 商业轮换网关填固定入口即可
+#       tag: "vendor-x"
+#   tor_socks_host: "127.0.0.1"      # mode=tor 时生效（隐式出口 socks5://127.0.0.1:9050）
+#   tor_socks_port: 9050
+#   tor_control_port: 9051
+#   tor_control_password: ""         # Tor CookieAuth 默认可留空；HashedControlPassword 则填密码
+#   tor_newnym_per_target: false     # 每个新目标 SIGNAL NEWNYM 换一次电路
+#   doh_enabled: false        # DNS 反溯源：域名解析走 DoH（DoH 请求自身也走代理）
+#   doh_strict: false         # true=DoH 失败拒绝出站；false=降级系统解析（审计）
+#   cleanup_on_session_end: false  # 会话结束自动清 session 级缓存（audit.log/reports 永不清理）
 model:
   # 主模型可用 RECON_MODEL / RECON_API_BASE / RECON_API_KEY 覆盖；非空生效，不影响 fallback。
   provider: litellm

@@ -1,4 +1,8 @@
-"""Bounded HTTP/1.1 GET/HEAD with scope checks and DNS-pinned connections."""
+"""Bounded HTTP/1.1 GET/HEAD with scope checks and DNS-pinned connections.
+
+匿名层：require_anonymity_or_raise 决定直连或隧道（SOCKS5/HTTP CONNECT）；
+kill-switch 触发时拒绝出站（fail closed），绝不降级直连。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -6,9 +10,29 @@ import socket
 import ssl
 from urllib.parse import urljoin,urlsplit
 
+from security.anonymity import tunnel
+from security.anonymity.egress import require_anonymity_or_raise
 from security.stealth import allowed_target,is_in_scope,random_user_agent
 from utils.config import get_settings
 from platforms.sync_worker import resolve_addresses
+
+_TOR_NEWNYM_DONE: set[str] = set()
+
+
+def _maybe_tor_newnym(target: str):
+    """mode=tor 且 newnym_per_target=True 时，每个新目标换一次 Tor 出口电路。"""
+    from security.anonymity.egress import get_anonymity_config
+    from utils.logger import audit
+    cfg = get_anonymity_config()
+    if cfg.mode != 'tor' or not cfg.tor_newnym_per_target:
+        return
+    key = target.strip().lower()
+    if key in _TOR_NEWNYM_DONE:
+        return
+    _TOR_NEWNYM_DONE.add(key)
+    from security.anonymity import tunnel as _t
+    ok = _t.tor_newnym('127.0.0.1', cfg.tor_control_port, cfg.tor_control_password)
+    audit('tor_newnym', {'target': key[:128], 'ok': ok})
 
 
 def _origin(url):
@@ -71,10 +95,26 @@ async def _request_chain(url,target,settings,method,headers,max_bytes,max_redire
         for info in addresses:
             ok,reason=allowed_target(info[4][0],settings)
             if not ok: raise ValueError('HTTP resolved address rejected: '+reason)
-        # Use the inspected numeric address directly; TLS still validates the original hostname.
-        ip=addresses[0][4][0]
-        context=ssl.create_default_context() if parsed.scheme=='https' else None
-        reader,writer=await asyncio.open_connection(ip,port,ssl=context,server_hostname=parsed.hostname if context else None,limit=65536)
+        # SSRF 复核保持本地解析结论（防 DNS rebinding）；实际连接按匿名层路由。
+        endpoint=require_anonymity_or_raise(target)
+        context=None   # 代理分支不持有目标 TLS 上下文（隧道内已由 start_tls 完成）
+        if endpoint is not None:
+            _maybe_tor_newnym(target)
+            # 隧道由代理端解析并连接目标（SOCKS5 ATYP=domain / CONNECT 域名），本地不直连目标 IP。
+            try:
+                reader,writer=await tunnel.connect_async(endpoint.url,parsed.hostname,port,timeout=30.0)
+            except BaseException:
+                from security.anonymity.egress import report_egress_failure
+                report_egress_failure()   # HARD：死出口必须冷却，防止反复撞墙
+                raise
+            if parsed.scheme=='https':
+                context=ssl.create_default_context()
+                await writer.start_tls(context,server_hostname=parsed.hostname)
+        else:
+            # Use the inspected numeric address directly; TLS still validates the original hostname.
+            ip=addresses[0][4][0]
+            context=ssl.create_default_context() if parsed.scheme=='https' else None
+            reader,writer=await asyncio.open_connection(ip,port,ssl=context,server_hostname=parsed.hostname if context else None,limit=65536)
         try:
             hostname=parsed.hostname
             if ':' in hostname: hostname='['+hostname+']'

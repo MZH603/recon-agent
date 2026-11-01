@@ -110,6 +110,34 @@ model:
 
 模型到第一条任务才初始化，配置或连接失败会暂停，允许报告、退出并恢复；会话不会自动运行默认流水线。
 
+## 匿名层（可选，默认关闭）
+
+出站流量默认直连（与历史行为一致）。需要虚拟 IP / IP 池 / 动态 IP 时，在 `config.yaml` 取消
+`anonymity:` 注释并配置出口（完整示例见该文件注释）：
+
+```yaml
+anonymity:
+  enabled: true
+  mode: pool                 # single | pool | tor
+  rotation: sticky           # 同目标固定出口（防抖动指纹），目标间轮换
+  kill_switch: true          # HARD：无健康出口时拒绝出站，绝不直连
+  proxies:
+    - url: "socks5://127.0.0.1:1080"
+    - url: "http://user:pass@vendor-gateway.example.com:8080"   # 商业轮换网关
+  doh_enabled: true          # DNS 反溯源（DoH 请求自身也走代理）
+```
+
+- **出口类型**：HTTP/HTTPS/SOCKS5 手工池、Tor（mode=tor，可 `tor_newnym_per_target` 每目标换电路）、
+  商业轮换网关（固定入口即动态 IP）；零第三方依赖（纯手写 CONNECT/SOCKS5 握手）。
+- **kill-switch**：匿名启用但无可用出口时所有出站请求被拒绝（不泄露真实 IP）；
+  `kill_switch: false` 可显式接受风险降级直连（全量审计）。
+- **DNS 反溯源**：`doh_enabled` 后域名解析走 DoH；`doh_strict: true` 时 DoH 失败直接拒绝出站。
+- **痕迹清理**：`recon-agent cleanup --scope session|artifacts|system|all [--dry-run]`；
+  `audit.log`（哈希链）与 `reports/` 永不清理。`cleanup_on_session_end: true` 可在会话结束自动清 session 级缓存。
+- **自检**：`recon-agent --doctor` 显示出口可达性 / Tor 控制面 / DoH 状态；
+  本次运行临时启用可用 `recon-agent --anon -t …`。
+- 限速与并发 HARD 参数不受轮换影响：轮换出口 ≠ 提高请求速率。
+
 ## 交互会话与恢复
 
 启动打印会话 ID 和恢复命令。在 `recon>` 输入中文或自然语言任务，例如“仅查询 example.com 的 A 记录，然后总结来源”。回复待确认问题时恢复当前节点。仅在显式任务之后才可能调用模型或工具。

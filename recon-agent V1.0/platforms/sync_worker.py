@@ -11,11 +11,20 @@ import ipaddress
 from platforms.subprocess import spawn_owned, release_process
 
 
+def _resolve_addresses_blocking(host, port, anonymity):
+    """阻塞解析（子进程执行）：DoH 启用时优先（HARD：完整匿名配置随参数传入，
+    子进程不重读 config.yaml —— 防止 CLI 临时开关/内存覆盖在子进程中失效）。"""
+    from security.anonymity.dns_privacy import resolve_host
+    return resolve_host(host, port, config=anonymity)
+
+
 async def resolve_addresses(host, port):
     try:
         ipaddress.ip_address(host)
     except ValueError:
-        return await run_sync(socket.getaddrinfo, host, port, type=socket.SOCK_STREAM)
+        from utils.config import get_settings
+        anonymity = get_settings().anonymity
+        return await run_sync(_resolve_addresses_blocking, host, port, anonymity)
     # A numeric address requires no name service or background resolver thread.
     return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
 

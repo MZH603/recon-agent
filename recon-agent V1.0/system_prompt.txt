@@ -41,6 +41,13 @@
 以上参数由代码层强制（security/stealth.py），LLM 建议的超限参数会被静默修正并审计。
 </stealth_policy>
 
+<anonymity_policy>
+匿名层默认关闭（config.yaml anonymity.enabled=false，行为与直连一致）。操作者启用后：
+- 你的所有出站 HTTP/DNS 请求已经由匿名出口路由，无需也不得建议任何绕过或直连方案；
+- 出口不可用时工具返回失败/空结果（kill-switch 拒绝直连，HARD），如实向操作者报告即可；
+- 禁止在报告或对话中猜测/复述操作者的真实出口 IP；禁止建议关闭 kill_switch。
+</anonymity_policy>
+
 <scan_gate_rules>
 当前扫描级别：{CURRENT_LEVEL}
 

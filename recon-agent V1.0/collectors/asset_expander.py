@@ -5,9 +5,8 @@ import asyncio
 from platforms.sync_worker import run_sync
 import json
 import socket
-import urllib.request
 
-from security.stealth import normalize_host, random_user_agent
+from security.stealth import normalize_host
 from utils.config import Settings, get_settings
 from utils.logger import ok, warn
 
@@ -164,10 +163,10 @@ async def _crtsh_subdomains(domain: str, settings: Settings) -> dict:
 
 
 def _http_get(url: str, timeout: int) -> str:
-    """同步 GET（线程池中执行），浏览器 UA 伪装。"""
-    req = urllib.request.Request(url, headers={"User-Agent": random_user_agent()})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read(1_000_000).decode("utf-8", errors="replace")
+    """同步 GET（线程池中执行）：委托统一出口（匿名层经 egress 注入路由与头部档案）。"""
+    from tools.builtin.webfetch import http_get
+    _, _, body = http_get(url, timeout=timeout, max_bytes=1_000_000)
+    return body
 
 
 async def _whois(domain: str, settings: Settings) -> dict:

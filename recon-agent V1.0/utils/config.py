@@ -8,6 +8,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_serializer, field_validator
 
 from platforms.paths import get_config_dir
+from security.anonymity.config import AnonymityConfig
 from tools.adapters.integration_config import CustomToolConfig, MCPServerConfig
 from tools.adapters.extension_config import ExtensionToolsConfig
 
@@ -73,6 +74,9 @@ class Settings(BaseModel):
     # HARD 绝对红线：政府/军事域名（含中国 .gov.cn/.mil.cn，后缀匹配已验证覆盖）
     PROTECTED_TLDS: tuple[str, ...] = (".gov", ".mil", ".gov.cn", ".mil.cn")
     RFC1918_RANGES: tuple[str, ...] = ("10.", "172.16.", "192.168.", "127.", "169.254.")
+    # ---- 匿名层（HARD：默认关闭；关闭时行为与历史版本完全一致）----
+    # 结构定义见 security/anonymity/config.py；此处仅挂载，LLM 不可见不可改。
+    anonymity: AnonymityConfig = Field(default_factory=AnonymityConfig)
     # ---- 实验环境模式（--lab）----
     # HARD：仅用于操作者自有/自建的内部实验目标（家庭靶场、DVWA、自有设备）。
     # 解锁 RFC1918/内网/环回；绝对红线不受任何模式影响：

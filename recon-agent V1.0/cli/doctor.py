@@ -8,6 +8,7 @@ import urllib.request
 
 from platforms.tools import find_tool
 from rich.table import Table
+from utils.config import get_settings
 from utils.logger import audit_path, console, verify_audit_chain
 
 
@@ -24,6 +25,40 @@ def _check(name: str, ok: bool, detail: str, table: Table, mark_ok: str = "✅ �
     """向体检表追加一行。"""
     level = "✅" if ok else "❌"
     table.add_row(name, level, detail)
+
+
+def _anonymity_checks(table: Table) -> None:
+    """匿名层自检：配置状态 / 出口可达 / DoH（信息性，不作为门禁）。"""
+    from security.anonymity.config import DEFAULT_PROBE_URL
+    from security.anonymity.egress import is_anonymity_enabled, resolve_endpoints
+    from security.anonymity.pool import probe_endpoint
+
+    cfg_enabled = is_anonymity_enabled()
+    endpoints = resolve_endpoints(get_settings().anonymity) if cfg_enabled else []
+    if not cfg_enabled:
+        _check("匿名层", True, "未启用（enabled=false，直连，历史行为）", table)
+        return
+    _check("匿名层", True,
+           f"已启用 · mode={get_settings().anonymity.mode} · rotation={get_settings().anonymity.rotation}", table)
+    for endpoint in endpoints:
+        import urllib.parse
+        parsed = urllib.parse.urlsplit(endpoint.url)
+        masked = f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"
+        ok, latency = probe_endpoint(endpoint, DEFAULT_PROBE_URL)
+        detail = f"{masked} · {latency:.0f}ms" if ok else f"{masked} · 不可达（kill-switch 将拒绝出站）"
+        _check(f"匿名出口 {endpoint.tag or masked}", ok, detail, table)
+    doh_enabled = get_settings().anonymity.doh_enabled
+    if doh_enabled:
+        try:
+            from security.anonymity.dns_privacy import doh_resolve
+            answers = doh_resolve("example.com", "A", timeout=6)
+            _check("DoH 反溯源解析", bool(answers), f"example.com → {answers[:2]}", table)
+        except Exception as exc:  # noqa: BLE001 —— 自检只报告
+            strict = get_settings().anonymity.doh_strict
+            _check("DoH 反溯源解析", False,
+                   f"失败（doh_strict={'拒绝出站' if strict else '降级系统解析'}）: {type(exc).__name__}", table)
+    else:
+        _check("DoH 反溯源解析", True, "未启用（系统解析，历史行为）", table)
 
 
 def run_doctor() -> int:
@@ -67,6 +102,7 @@ def run_doctor() -> int:
     _check("CVE 快照", snapshot.exists(),
            str(snapshot) if snapshot.exists() else "缺失 → python -m knowledge.snapshot 构建", table)
 
+    _anonymity_checks(table)
     console().print(table)
     console().print("[yellow]提示：内网/环回目标需 --lab（仅限自有实验环境）；.gov/.mil 绝对拒绝。[/yellow]")
     return 0

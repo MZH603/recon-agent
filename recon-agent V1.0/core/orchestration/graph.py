@@ -24,6 +24,21 @@ from utils.config import Settings
 from model.base import observe
 
 
+def _session_trace_cleanup(settings: Settings) -> None:
+    """会话收尾钩子：匿名层 cleanup_on_session_end=True 时清理 session 级缓存。
+
+    HARD：trace_cleanup 白名单结构上不包含 audit.log/reports/会话数据库。
+    """
+    try:
+        if not settings.anonymity.cleanup_on_session_end:
+            return
+        from security.anonymity.trace_cleanup import cleanup
+        cleanup('session')
+    except Exception as exc:  # noqa: BLE001 —— 收尾清理失败不阻断会话关闭
+        from utils.logger import audit
+        audit('session_cleanup_hook_failed', {'error': str(exc)[:128]})
+
+
 class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupport):
     """Use as an async context manager; startup is idle and makes no external calls.
 
@@ -70,6 +85,9 @@ class SessionRuntime(DecisionNodes, AuthorizationNodes, ExecutionNodes, NodeSupp
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._ownership.acquire()
             self._stack.callback(self._ownership.release)
+            # 匿名层：会话结束自动清理 session 级缓存（cleanup_on_session_end=True 时；
+            # audit.log/reports/会话数据库不在白名单，结构上不可触达）
+            self._stack.callback(_session_trace_cleanup, self.settings)
             self._stack.push_async_callback(self.registry.aclose)
             await self.store.open()
             self._stack.push_async_callback(self.store.close)

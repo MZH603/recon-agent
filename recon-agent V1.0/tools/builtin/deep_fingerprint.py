@@ -16,8 +16,9 @@ import urllib.request
 
 from pydantic import BaseModel, Field
 
-from security.http_scope import urlopen_same_host
-from security.stealth import StealthRateLimiter, random_user_agent
+from security.anonymity.egress import urlopen_same_origin
+from security.anonymity.fingerprint import request_headers
+from security.stealth import StealthRateLimiter
 from tools.base import BaseTool, ToolResult
 from tools.builtin.fingerprint import FingerprintParams, FingerprintTool, _add, split_target
 from tools.techniques import REGISTRY  # noqa: F401 —— 导入即注册
@@ -119,8 +120,8 @@ class DeepFingerprintTool(BaseTool):
 
     @staticmethod
     def _sync_get(url: str) -> str:
-        req = urllib.request.Request(url, headers={"User-Agent": random_user_agent()})
-        with urlopen_same_host(req, timeout=get_settings().CONNECT_TIMEOUT) as resp:
+        req = urllib.request.Request(url, headers=request_headers())
+        with urlopen_same_origin(req, timeout=get_settings().CONNECT_TIMEOUT) as resp:
             return resp.read(100_000).decode("utf-8", errors="replace")
 
     async def _pick_scheme(self, netloc: str) -> str | None:

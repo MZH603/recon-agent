@@ -12,13 +12,26 @@ import os
 import sys
 from pathlib import Path
 
+import click
 import typer
 from rich.console import Console
 
 from utils.config import Settings, get_settings
 from utils.logger import err, warn
 
-app = typer.Typer(add_completion=False, help="Recon Agent V1.0 — 授权渗透测试信息搜集（被动优先/三级门控/MCP 接入）")
+class _DefaultRunGroup(typer.core.TyperGroup):
+    """非已知子命令参数（含裸调用）一律路由到 run（HARD 兼容：保持历史单命令用法）。"""
+
+    _KNOWN_COMMANDS = ("run", "cleanup")
+
+    def parse_args(self, ctx, args):
+        if not args or args[0] not in self._KNOWN_COMMANDS + ("--help", "-h"):
+            args = ["run", *args]
+        return super().parse_args(ctx, args)
+
+
+app = typer.Typer(add_completion=False, cls=_DefaultRunGroup,
+                  help="Recon Agent V1.0 — 授权渗透测试信息搜集（被动优先/三级门控/MCP 接入）")
 console = Console()
 
 BANNER = (
@@ -79,14 +92,21 @@ def run(
                                       help="显式启用 L2 自动门控确认（仅限授权测试目标）"),
     tools_config: Path = typer.Option(None, '--tools-config', help='自定义工具和外部 MCP 配置 YAML'),
     list_tools: bool = typer.Option(False, '--list-tools', help='离线列出可用工具和最低级别后退出'),
+    anon: bool = typer.Option(False, '--anon', help='启用匿名层（经 config.yaml anonymity 出口路由；'
+                                                    'kill-switch：无健康出口时拒绝出站）'),
     doctor: bool = typer.Option(False, "--doctor", callback=_doctor_callback, is_eager=True,
-                                help="环境自检（工具/网络/API Key/审计链/快照）"),
+                                help="环境自检（工具/网络/API Key/审计链/快照/匿名层）"),
     version: bool = typer.Option(None, "--version", callback=_version_callback, is_eager=True,
                                  help="打印版本号"),
 ) -> None:
     """对授权目标执行信息搜集，或以 MCP 服务器模式供 Agent 接入。"""
     try:
         settings = _settings_with(max_tokens, max_cost)
+        if anon:
+            from utils.logger import audit
+            if not settings.anonymity.enabled:
+                audit('anon_cli_enabled', {'source': '--anon'})
+            settings.anonymity.enabled = True
         if context_tokens is not None or compact_ratio is not None:
             context_config = Settings(
                 CONTEXT_BUDGET=context_tokens if context_tokens is not None else settings.CONTEXT_BUDGET,
@@ -214,6 +234,44 @@ def run(
         )
 
     raise typer.Exit(asyncio.run(_flow()))
+
+
+_CLEANUP_SCOPES = ("session", "artifacts", "system", "all")
+
+
+@app.command("cleanup")
+def cleanup_cmd(
+    scope: str = typer.Option("session", "--scope", help="清理范围: session|artifacts|system|all"),
+    yes: bool = typer.Option(False, "--yes", help="跳过预览确认（artifacts/all 仍要求）"),
+    target: str = typer.Option(None, "--target", help="system 范围下仅清理该目标的签名文件"),
+    dry_run_list: bool = typer.Option(False, "--dry-run", help="仅列出将被清理的路径，不删除"),
+) -> None:
+    """痕迹清理（HARD：audit.log 与 reports/ 永不清理，白名单结构保证）。"""
+    from utils.logger import ok as log_ok, warn as log_warn
+
+    if scope not in _CLEANUP_SCOPES:
+        log_warn(f"未知清理范围 '{scope}'，可选: {', '.join(_CLEANUP_SCOPES)}")
+        raise typer.Exit(2)
+    from security.anonymity.trace_cleanup import cleanup, dry_run
+    if dry_run_list:
+        for path in dry_run(scope, target):
+            console.print(path)
+        return
+    candidates = dry_run(scope, target)
+    if candidates:
+        console.print("[yellow]将清理以下路径:[/yellow]")
+        for path in candidates[:20]:
+            console.print(f"  {path}")
+        if len(candidates) > 20:
+            console.print(f"  ... 共 {len(candidates)} 项")
+    if scope in ("artifacts", "all"):
+        console.print("[red]artifacts 范围会删除证据库与工作区记录（报告引用的证据将失效）。[/red]")
+    if not yes or scope in ("artifacts", "all"):
+        if not typer.confirm("确认执行清理？", default=False):
+            raise typer.Exit(1)
+    result = cleanup(scope, target)
+    log_ok(f"清理完成: 删除 {result['removed']} 项，失败 {result['failed']} 项"
+           f"（audit.log 与 reports/ 始终保留）")
 
 
 def _settings_with(max_tokens: int | None, max_cost: float | None) -> Settings:

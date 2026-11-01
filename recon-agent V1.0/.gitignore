@@ -6,3 +6,4 @@ reports/
 .pytest_cache/
 .pytest_tmp/
 .ofa_env/
+.zcode/
