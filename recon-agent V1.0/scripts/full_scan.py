@@ -1,4 +1,4 @@
-"""全级联扫描（L0→L1→L2）：状态按目标分文件存储，消除跨目标污染。
+"""全级联扫描（L1 基础侦察→L2→L3，v1.1 起 L0 并入 L1）：状态按目标分文件存储，消除跨目标污染。
 
 修复清单（本轮）：
 - 状态文件按目标分文件存储（scan_state_<safe_target>.json）
@@ -56,9 +56,11 @@ def load_state(target: str) -> dict:
                 "port_map": state.get("port_map", {}),
                 "subdomains": state.get("subdomains", []),
                 "alive": state.get("alive", []),
+                "l3_done": state.get("l3_done", []),
+                "dir_deep_results": state.get("dir_deep_results", []),
                 "done": {c.get("host") for c in cards}}
     return {"deep_cards": [], "dir_results": [], "port_map": {},
-            "subdomains": [], "alive": [],
+            "subdomains": [], "alive": [], "l3_done": [], "dir_deep_results": [],
             "done": set()}
 
 
@@ -78,15 +80,18 @@ def save_state(target: str, state: dict) -> None:
         "port_map": state["port_map"],
         "subdomains": state.get("subdomains", []),
         "alive": state.get("alive", []),
+        "l3_done": state.get("l3_done", []),
+        "dir_deep_results": state.get("dir_deep_results", []),
     })
     path.write_text(json.dumps(existing, ensure_ascii=False, indent=1),
                     encoding="utf-8", newline="")
 
 
 def make_cascade_gate(target: str, level: int, auto_confirm: bool) -> ScanGate:
-    """级联门控：level≥2 需三次解锁。auto_confirm 为显式参数（非 isatty 推断）。"""
+    """级联门控：level≥2/3 需三次解锁。auto_confirm 为显式参数（非 isatty 推断）。"""
     if auto_confirm and level >= 2:
-        queue = ["CONFIRM 2", "I UNDERSTAND AND AUTHORIZE"]
+        step1 = "CONFIRM 3" if level >= 3 else "CONFIRM 2"
+        queue = [step1, "I UNDERSTAND AND AUTHORIZE"]
 
         async def canned(_prompt: str) -> str:
             return queue.pop(0) if queue else "yes"
@@ -94,6 +99,7 @@ def make_cascade_gate(target: str, level: int, auto_confirm: bool) -> ScanGate:
         gate = ScanGate(target, batch_mode=False, is_tty=True,
                         prompt_fn=canned, requested_level=1)
         original = gate.request_level_2_step
+        original3 = gate.request_level_3_step
 
         async def step2_wrapper(step: int, plan: str = "") -> tuple[bool, str]:
             if step == 2:
@@ -101,15 +107,22 @@ def make_cascade_gate(target: str, level: int, auto_confirm: bool) -> ScanGate:
                 return True, target
             return await original(step, plan)
 
+        async def step2_wrapper_l3(step: int, plan: str = "") -> tuple[bool, str]:
+            if step == 2:
+                gate._log_confirm("l3_step2", target)
+                return True, target
+            return await original3(step, plan)
+
         gate.request_level_2_step = step2_wrapper  # type: ignore[method-assign]
+        gate.request_level_3_step = step2_wrapper_l3  # type: ignore[method-assign]
         return gate
     return ScanGate(target, batch_mode=False, is_tty=sys.stdin.isatty(), requested_level=level)
 
 
-async def stage_l0(
+async def stage_l0(  # noqa: N802 —— 保留历史名（内容=L1 基础侦察被动段）
     target: str, registry, builder: ReportBuilder, settings
 ) -> list[str] | None:
-    section("Stage L0 · 被动测绘")
+    section("Stage L1 · 基础侦察·被动段（拓线/指纹/情报扩容）")
     sub = await registry.execute(NormalizedToolCall(
         id="fs-sub", name="subdomain_enum",
         arguments={"target": target, "recursive": True, "brute": True, "max_hosts": 100}))
@@ -130,14 +143,17 @@ async def stage_l0(
     for note in assets["notes"]:
         builder.add_note(note)
     await enrich_recon(builder.data, settings)
-    ok(f"L0 完成：子域 {len(builder.data.subdomains)} · 存活 {len(alive)}")
+    from collectors.intel_expander import expand_intel
+
+    await expand_intel(builder.data, settings)  # 测绘引擎/组织情报/代码泄漏/dorking（L0）
+    ok(f"L1 被动段完成：子域 {len(builder.data.subdomains)} · 存活 {len(alive)}")
     return alive
 
 
 async def stage_l1(target: str, alive: list[str], registry, builder: ReportBuilder,
                    state: dict) -> int:
     hosts = [target] + [h for h in alive if h != target]
-    section(f"Stage L1 · 隐蔽端口扫描（全部 {len(hosts)} 台存活资产）")
+    section(f"Stage L1 · 基础侦察·隐蔽端口段（{len(hosts)} 台存活资产）")
 
     # 每主机并行，受各自レート限制器控制；整体并发由 MAX_CONCURRENCY / 每主机限速决定
     # 使用信号量限制同时进行的主机数，避免超过总并发上限
@@ -240,6 +256,87 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
         err(f"沙箱探针: {probe.error[:120]}")
 
 
+async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuilder,
+                   state: dict, gate: ScanGate) -> None:
+    """L3 自适应低扰动：dns_enum → service_banner → vhost → origin_hunt → cloud_enum
+    → dir_enum_deep（高价值子域 ≤5 台）→ api_doc_probe。
+
+    HARD：每步前检查门控；tier1（nmap_scan_l3）不进入级联默认执行——留作 agent/操作者
+    逐项确认的显式动作；扰动熔断的主机记入报告「采样中止清单」，绝不硬闯。
+    """
+    section("Stage L3 · 自适应低扰动主动侦察")
+    l3_done = state.setdefault("l3_done", [])
+
+    async def _run(tool_id: str, tool_name: str, arguments: dict, key: str) -> dict | None:
+        if key in l3_done:
+            info(f"[L3] {tool_name} {key} 已完成（续跑跳过）")
+            return None
+        if gate.current_level() < 3:
+            return None
+        result = await registry.execute(NormalizedToolCall(
+            id=f"fs-l3-{tool_id}", name=tool_name, arguments=arguments))
+        l3_done.append(key)
+        if result.success:
+            builder.add_note(f"L3 {tool_name}: "
+                             f"{json.dumps(result.data, ensure_ascii=False, default=str)[:400]}")
+            save_state(target, state)
+            return result.data
+        builder.add_note(f"L3 {tool_name} 失败: {result.error[:160]}")
+        return None
+
+    # 1) DNS 枚举（AXFR/泛解析/字典/置换）
+    await _run("dns", "dns_enum",
+               {"target": target, "try_axfr": True, "permute": True}, f"dns:{target}")
+
+    # 2) 主机 banner 识别（对 L1 端口面，≤20 端口/台，仅前 5 台）
+    port_map = state.get("port_map") or builder.data.port_map
+    banner_hosts = [h for h, ports in port_map.items() if ports][:5]
+    for host in banner_hosts:
+        ports = [p for p in port_map[host] if p in (21, 22, 25, 110, 143, 443, 445, 3306,
+                                                    3389, 5432, 5900, 6379, 8080, 9200)][:20]
+        if ports:
+            await _run(f"banner-{host}", "service_banner",
+                       {"target": host, "ports": ports}, f"banner:{host}")
+
+    # 3) vhost / 4) 源站线索 / 5) 云存储（主域各一轮）
+    await _run("vhost", "vhost_scan",
+               {"target": target, "candidates": sorted(state.get("subdomains", []))[:20]},
+               f"vhost:{target}")
+    await _run("origin", "origin_hunt", {"target": target}, f"origin:{target}")
+    await _run("cloud", "cloud_enum", {"target": target}, f"cloud:{target}")
+
+    # 6) 深度目录枚举 + API 文档探测（L2 指纹卡片中的高价值主机 ≤5 台）
+    interesting = set()
+    for card in builder.data.tech_cards:
+        h = str(card.get("host", ""))
+        tech = card.get("tech") or {}
+        if h and not card.get("error") and (
+            tech.get("system") or tech.get("middleware") or tech.get("framework")):
+            interesting.add(h)
+    for host in sorted(interesting)[:5]:
+        if gate.current_level() < 3:
+            return
+        result = await registry.execute(NormalizedToolCall(
+            id=f"fs-l3-dir-{host}", name="dir_enum_deep",
+            arguments={"target": host, "max_paths": 120}))
+        l3_done.append(f"dirdeep:{host}")
+        if result.success:
+            state.setdefault("dir_deep_results", []).append(
+                {"target": host, "success": True, "data": result.data})
+            builder.add_note(
+                f"L3 dir_enum_deep {host}: 检查 {result.data.get('checked', 0)} 路径，"
+                f"发现 {len(result.data.get('found', []))}（High {result.data.get('high_count', 0)}）"
+                + ("，[扰动熔断中止]" if result.data.get("suspended") else ""))
+        else:
+            builder.add_note(f"L3 dir_enum_deep {host} 失败: {result.error[:120]}")
+        save_state(target, state)
+        await _run(f"docs-{host}", "api_doc_probe", {"target": host}, f"docs:{host}")
+
+    if gate.current_level() < 3:
+        return
+    ok("L3 完成：扰动台账见各步骤 disturbance 字段；tier1（SYN/UDP/version）未自动执行")
+
+
 async def run(target: str, authorized: bool, level: int, auto_confirm: bool, note: str,
               settings: Settings | None = None) -> int:
     settings = settings or get_settings()
@@ -253,23 +350,26 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
             audit("cascade_authorization", {"target": target, "level": level, "note": note})
             info(f"授权背景已记录: {note}")
         builder = ReportBuilder(target, scan_level=0,
-                                strategy_note=f"级联扫描 L0→L{level}（高级别自动包含全部低等级）")
+                                strategy_note=f"级联扫描 L1→L{level}（L0 已并入 L1；高级别自动包含全部低等级）")
         state = load_state(target)
         done_hosts = set(state["done"])
         builder.data.port_map.update(state["port_map"])
         builder.add_tech_cards(state["deep_cards"])
 
-        alive = await stage_l0(target, registry, builder, settings)
-        if alive is None:
-            err("资产枚举未完成；为避免遗漏授权资产，已停止后续 L1/L2。")
-            return 2
-        state["subdomains"] = builder.data.subdomains
-        state["alive"] = alive
-
+        # v1.1 合并：L0 已并入 L1——被动段与端口段都在 L1 授权下执行
         violations = 0
         if level >= 1 and gate.current_level() >= 1:
+            alive = await stage_l0(target, registry, builder, settings)
+            if alive is None:
+                err("资产枚举未完成；为避免遗漏授权资产，已停止后续 L1/L2/L3。")
+                return 2
+            state["subdomains"] = builder.data.subdomains
+            state["alive"] = alive
             violations = await stage_l1(target, alive, registry, builder, state)
             builder.data.port_map.update(state["port_map"])
+        else:
+            err("[门控] 级别 0（未解锁）：L0 已并入 L1 基础侦察，请用 --profile stealth/--level 1 及以上")
+            return 2
         if level >= 2:
             plan = f"级联 L2：深度指纹 {len(alive)} 台 + 定向路径枚举（从指纹卡片动态选取）"
             for step in (1, 2, 3):
@@ -281,6 +381,17 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
             else:
                 ok(f"L2 已解锁，签名校验: {gate.verify_signature()}")
                 await stage_l2(target, alive, registry, builder, state, done_hosts, gate)
+        if level >= 3 and gate.current_level() >= 3:
+            plan = f"级联 L3（自适应低扰动）：DNS 枚举/banner/虚拟主机/源站线索/云存储/深度目录（{len(alive)} 台存活）"
+            for step in (1, 2, 3):
+                granted, text = await gate.request_level_3_step(step, plan=plan)
+                if not granted:
+                    err(f"L3 门控第 {step}/3 步未通过（{text!r}）→ 以当前级别 L{gate.current_level()} 出报告")
+                    level = gate.current_level()
+                    break
+            else:
+                ok(f"L3 已解锁，签名校验: {gate.verify_signature()}")
+                await stage_l3(target, alive, registry, builder, state, gate)
 
         builder.data.scan_level = gate.current_level()
         metrics = TaskMetrics()
@@ -316,10 +427,10 @@ def _build_next_steps(data, level: int) -> list[dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="全级联扫描 L0→L1→L2（高级别自动包含低等级）")
+    parser = argparse.ArgumentParser(description="全级联扫描 L1→L2→L3（L0 已并入 L1；高级别自动包含低等级）")
     parser.add_argument("--target", required=True)
     parser.add_argument("--authorized", action="store_true")
-    parser.add_argument("--level", type=int, default=2, choices=(0, 1, 2))
+    parser.add_argument("--level", type=int, default=2, choices=(0, 1, 2, 3))  # 0=未解锁（L0 已并入 L1）
     parser.add_argument("--auto-confirm", action="store_true")
     parser.add_argument("--note", default="")
     args = parser.parse_args(argv)

@@ -7,7 +7,7 @@ def test_stealth_defaults():
     assert s.MAX_CONCURRENCY == 1
     assert s.MAX_CONCURRENCY_HARD == 2
     assert s.MAX_RETRIES == 0  # HARD: 失败不重试
-    assert s.SCAN_LEVEL_DEFAULT == 0
+    assert s.SCAN_LEVEL_DEFAULT == 1  # v1.1: L0 已并入 L1（默认 L1 基础侦察）
     assert s.NMAP_ARGS_SAFE[0] == "-sT"  # 仅 TCP Connect
     assert "-sS" in s.FORBIDDEN_NMAP_ARGS
 
@@ -33,5 +33,11 @@ def test_no_api_key_field_on_global_settings():
         "SHODAN_API_KEY", "SHODAN_API_SECRET",
         "CENSYS_API_KEY", "CENSYS_API_SECRET",
         "BINARYEDGE_API_KEY", "BINARYEDGE_API_SECRET",
+        "HUNTER_API_KEY", "HUNTER_API_SECRET",
+        "NETLAS_API_KEY", "NETLAS_API_SECRET",
+        "VIRUSTOTAL_API_KEY", "VIRUSTOTAL_API_SECRET",
+        "SECURITYTRAILS_API_KEY", "SECURITYTRAILS_API_SECRET",
+        "GITHUB_API_KEY", "GITEE_API_KEY",
+        "ICP_API_KEY", "ORG_API_KEY",
     )]
     assert not main_model_keys, f"Found main model key fields on global settings: {main_model_keys}"

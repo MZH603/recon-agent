@@ -41,7 +41,7 @@ def test_controlled_argv_and_evidence(tmp_path,monkeypatch,kind,name):
     result=asyncio.run(tool.run(m.ScannerParams(target='example.com',paths=['api'],ports=[443])))
     assert result.success, result.error
     assert tool.name==name and tool.deferred and not tool.cacheable
-    assert tool.min_level==(0 if kind=='subfinder' else 2)
+    assert tool.min_level==(1 if kind=='subfinder' else 2)  # v1.1: L0 并入 L1
     assert result.source_hash and result.evidence
     assert 'foreign.test' not in json.dumps(result.data['result'])
     argv=calls[-1]

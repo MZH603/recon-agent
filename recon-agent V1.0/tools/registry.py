@@ -130,14 +130,16 @@ class ToolRegistry:
                     f"[门控] 当前级别 L{self._gate.current_level()} 不足（需 L{tool.min_level}），保持被动模式",
                 )
 
-        if tool.min_level == 2 and self._settings.GATE_PER_STEP_CONFIRM:
+        if tool.min_level in (2, 3) and self._settings.GATE_PER_STEP_CONFIRM:
             confirmed = await self._gate.confirm_step(
                 action=tool.name,
                 command=f"{tool.name} {params.target}",
                 risk=tool.risk_level,
+                level=tool.min_level,
+                tier=getattr(params, "tier1", 0) or getattr(params, "scan_tier", 0),
             )
             if not confirmed:
-                return ToolResult.err(tool.name, "[门控] 用户未确认该 L2 动作，已跳过")
+                return ToolResult.err(tool.name, "[门控] 用户未确认该动作，已跳过")
 
         try:
             result = await self.waiter.run(tool, params, execution_id or call.id, on_progress)
@@ -148,9 +150,9 @@ class ToolRegistry:
             return ToolResult.err(tool.name, f"工具执行异常: {exc}")
 
     async def _request_upgrade(self, tool: BaseTool) -> bool:
-        """按工具最低级别请求门控升级（L1 一次确认；L2 交由三级门控流程）。"""
-        if tool.min_level == 2:
-            return self._gate.current_level() >= 2  # HARD: L2 必须先走三级门控解锁
+        """按工具最低级别请求门控升级（L1 一次确认；L2/L3 交由三级门控流程）。"""
+        if tool.min_level in (2, 3):
+            return self._gate.current_level() >= tool.min_level  # HARD: 必须先走三级门控解锁
         purpose = f"运行 {tool.name}（{tool.description}）"
         return await self._gate.request_level_1(purpose)
 
@@ -172,6 +174,30 @@ def build_default(settings: Settings, gate: ScanGate, main_target: str, *, sessi
     registry.register(SystemScanTool(settings))     # L2：系统安全工具网关
     registry.register(DataSourceQueryTool(settings))  # L0：外部威胁情报数据源聚合查询
     registry.register(WebCrawlerTool(settings))     # L2：Headless Chrome 爬虫
+    # ---- 情报扩容（L0 被动：第三方平台，零目标基础设施接触）----
+    from tools.builtin.code_leak_search import CodeLeakSearchTool
+    from tools.builtin.org_intel import OrgIntelTool
+    from tools.builtin.dork_search import DorkSearchTool
+    registry.register(CodeLeakSearchTool(settings))  # L0：GitHub/Gitee 代码泄漏（脱敏）
+    registry.register(OrgIntelTool(settings))        # L0：邮箱/ICP/ASN/企业关联
+    registry.register(DorkSearchTool(settings))      # L0：搜索引擎 dorking
+    # ---- L3：自适应低扰动主动侦察（min_level=3，三级门控 + 逐项确认）----
+    from tools.builtin.nmap_tool import NmapL3Tool
+    from tools.builtin.dns_enum import DnsEnumTool
+    from tools.builtin.service_banner import ServiceBannerTool
+    from tools.builtin.vhost_scan import VhostScanTool
+    from tools.builtin.origin_hunt import OriginHuntTool
+    from tools.builtin.cloud_enum import CloudEnumTool
+    from tools.builtin.dir_enum_deep import DirEnumDeepTool
+    from tools.builtin.api_doc_probe import ApiDocProbeTool
+    registry.register(NmapL3Tool(settings))         # L3 tier1：SYN/UDP/version（低强度白名单）
+    registry.register(DnsEnumTool(settings))        # L3：AXFR/泛解析/字典/置换
+    registry.register(ServiceBannerTool(settings))  # L3 tier0：banner 服务识别
+    registry.register(VhostScanTool(settings))      # L3：Host 轮换差分
+    registry.register(OriginHuntTool(settings))     # L3：CDN 判定/源站候选（只记录）
+    registry.register(CloudEnumTool(settings))      # L3：云存储 bucket 分类
+    registry.register(DirEnumDeepTool(settings))    # L3：软404基线/403绕过/递归目录枚举
+    registry.register(ApiDocProbeTool(settings))    # L3：swagger/knife4j/druid 未授权面
     from tools.builtin.api_recon import ApiReconTool
     from tools.adapters.custom import build_custom_tools
     from tools.adapters.mcp_tools import build_mcp_tools

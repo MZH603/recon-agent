@@ -164,7 +164,7 @@ class ScannerTool(BaseTool):
 
     def __init__(self, config, settings, lock):
         self.config=config;self.settings=settings;self._lock=lock
-        self.name=NAMES[config.kind];self.min_level=0 if config.kind=='subfinder' else 2
+        self.name=NAMES[config.kind];self.min_level=1 if config.kind=='subfinder' else 2
         self.risk_level='低' if self.min_level==0 else '高'
         self.description='Controlled optional '+config.kind+' profile; explicit bounded scope and immutable evidence'
         if config.kind=='subfinder':

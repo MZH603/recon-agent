@@ -2,6 +2,25 @@
 CONTEXT_BUDGET: 100000         # 当前请求上下文容量，不是累计 token 预算
 COMPACT_TRIGGER_RATIO: 0.70   # 达到约 70000 tokens 自动压缩
 
+# ---- 外部情报源 API Keys（全部可选；未配置的源自动跳过并在报告中声明）----
+# 空间测绘引擎（FOFA/Quake/ZoomEye/Shodan/Censys/BinaryEdge + 鹰图/Netlas）
+# FOFA_API_KEY: ""
+# QUAKE_API_KEY: ""
+# SHODAN_API_KEY: ""
+# HUNTER_API_KEY: ""            # 鹰图 hunter.qianxin.com openApi key
+# NETLAS_API_KEY: ""
+# DNS/威胁情报（VirusTotal 免费额度 4 req/min，延迟已放宽；SecurityTrails 含历史解析）
+# VIRUSTOTAL_API_KEY: ""
+# SECURITYTRAILS_API_KEY: ""
+# 代码仓库泄漏（GitHub code search 强制认证，PAT 需 repo 读权限即可）
+# GITHUB_API_KEY: ""
+# GITEE_API_KEY: ""
+# ICP 备案/企业信息（可插拔 HTTP 源，URL 模板含 {domain} 占位符；空=通道跳过并声明）
+# ICP_API_URL: "https://your-icp-provider.example.com/api/icp?domain={domain}"
+# ICP_API_KEY: ""
+# ORG_API_BASE: "https://your-org-provider.example.com/api"
+# ORG_API_KEY: ""
+
 # ---- 匿名层（HARD：默认关闭；enabled=false 时行为与历史版本完全一致）----
 # 取消注释并按需修改即可启用；结构定义见 security/anonymity/config.py。
 # anonymity:

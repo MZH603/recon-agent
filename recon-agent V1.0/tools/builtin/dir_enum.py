@@ -138,3 +138,19 @@ class DirEnumTool(BaseTool):
                 return exc.code, ""
         except (OSError, ValueError):
             return -1, ""
+
+    def _get_response_with_headers(self, url: str, extra: dict[str, str]) -> tuple[int, str]:
+        """带头只读 GET（L3 403 绕过变换用；UA 仍由档案强制，extra 不可覆盖）。"""
+        merged = {**request_headers(), **{k: v for k, v in extra.items()
+                                          if k.lower() != "user-agent"}}
+        try:
+            req = urllib.request.Request(url, headers=merged)
+            with urlopen_same_origin(req, timeout=self._settings.CONNECT_TIMEOUT) as resp:
+                return resp.status, resp.read(100_000).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            try:
+                return exc.code, exc.read(100_000).decode("utf-8", errors="replace")
+            except (OSError, ValueError):
+                return exc.code, ""
+        except (OSError, ValueError):
+            return -1, ""

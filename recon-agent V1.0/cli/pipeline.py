@@ -19,7 +19,10 @@ async def run_pipeline(
     model_override: str | None, output_format: str, output_dir: str | None,
     diff_path: str | None = None,
 ) -> int:
-    """确定性 L0 流水线：拓线 → 指纹 → CVE → 一致性校验 → 报告（无 LLM 依赖）。"""
+    """确定性 L1 基础侦察流水线：拓线 → 指纹 → 隐蔽端口 → CVE → 一致性校验 → 报告（无 LLM 依赖）。
+
+    v1.1 合并：原 L0 纯被动段 + 原 L1 隐蔽端口扫描合并为 L1 基础侦察（一次确认覆盖）。
+    """
     ok, reason = allowed_target(target, settings)
     if not ok:
         err(f"[合规拦截] {reason}")
@@ -27,9 +30,14 @@ async def run_pipeline(
     gate = ScanGate(target, batch_mode=batch, is_tty=is_tty, requested_level=requested_level)
     if gate.downgrade_notice:
         warn(gate.downgrade_notice)
+    if gate.current_level() < 1:
+        # HARD: 级别 0 = 未解锁（L0 已并入 L1），不执行任何采集
+        err("[门控] 当前未解锁（级别 0）：L0 已并入 L1 基础侦察，请通过启动参数或交互确认解锁 L1")
+        return 2
     metrics = TaskMetrics(scan_level_reached=gate.current_level())
     data = ReconData(target=target, scan_level=gate.current_level())
-    info(f"开始 L0 被动采集: {target}（[🔒] 隐蔽约束全程生效）")
+    data.strategy_note = "L1 基础侦察（被动采集 + 隐蔽端口）"
+    info(f"开始 L1 基础侦察: {target}（[🔒] 隐蔽约束全程生效）")
 
     from collectors.asset_expander import expand_assets
     from collectors.web_fingerprint import collect_tech_cards, extract_product_versions
@@ -73,6 +81,7 @@ async def run_pipeline(
         host, scheme = str(card.get("host", "")), card.get("scheme", "")
         if not card.get("error") and host and scheme:
             data.port_map[host] = [443] if scheme == "https" else [80]
+    await _stage_l1_ports(data, settings)  # v1.1 合并：L1 隐蔽端口扫描并入流水线
     data.degraded = _collect_degraded(data)
     data.cves = await _lookup_cves(extract_product_versions(data.tech_cards), settings)
     data.doubts = _collect_doubts(data)
@@ -81,6 +90,9 @@ async def run_pipeline(
     from collectors.enrich import enrich_recon
 
     await enrich_recon(data, settings)  # Wayback 历史端点 + 子域接管候选（L0）
+    from collectors.intel_expander import expand_intel
+
+    await expand_intel(data, settings)  # 测绘引擎/组织情报/代码泄漏/dorking（L0，独立降级）
     metrics.incr("tool_calls", len(data.tech_cards))
     metrics.incr("tool_success", sum(1 for c in data.tech_cards if not c.get("error")))
     metrics.incr("cve_unknown_count", sum(1 for c in data.cves if c.get("status") in ("未收录", "不可用")))
@@ -94,6 +106,40 @@ async def run_pipeline(
     if diff_path:
         return _finalize(data, metrics, watermarks, output_dir, diff_path)
     return _finalize(data, metrics, watermarks, output_dir)
+
+
+PORT_SCAN_HOSTS_LIMIT = 6   # HARD: 流水线 L1 端口扫描主机上限（完整端口面走级联 --profile stealth）
+PORT_SCAN_PORTS = "80,443,22,8080,8443,3389,3306,6379"
+
+
+async def _stage_l1_ports(data, settings: Settings) -> None:
+    """L1 隐蔽端口扫描（v1.1 自原 L1 并入）：存活主机 ≤6 台，nmap 缺失自动降级 builtin。
+
+    HARD：仅 TCP Connect（enforce_stealth 强制）；结果并入 port_map（不覆盖 80/443 推断）；
+    单台失败记 notes 不中断。
+    """
+    from tools.builtin.nmap_tool import NmapTool, PortScanParams
+    from utils.logger import ok as _ok
+
+    hosts = [h for h in sorted(set(data.alive_hosts)) if h][:PORT_SCAN_HOSTS_LIMIT]
+    if not hosts:
+        return
+    tool = NmapTool(settings)
+    discovered = 0
+    for host in hosts:
+        result = await tool.run(PortScanParams(target=host, ports=PORT_SCAN_PORTS))
+        if not result.success:
+            data.notes.append(f"L1 端口扫描失败 {host}: {result.error[:120]}")
+            continue
+        open_ports = result.data.get("open_ports", [])
+        existing = set(data.port_map.get(host, []))
+        data.port_map[host] = sorted(existing | {int(p) for p in open_ports})
+        discovered += len(open_ports)
+        degraded = " [降级 builtin]" if result.degraded else ""
+        _ok(f"L1 端口 {host}: {open_ports or '无'}{degraded}")
+    data.notes.append(
+        f"L1 隐蔽端口扫描: {len(hosts)} 台 × {PORT_SCAN_PORTS}（开放 {discovered}；"
+        f"完整端口面可用 --profile aggressive 级联）")
 
 
 def _write_diff(data, diff_path: Path, markdown_path: Path) -> None:

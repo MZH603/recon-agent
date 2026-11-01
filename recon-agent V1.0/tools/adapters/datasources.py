@@ -1,5 +1,6 @@
 """Unified data source adapters for external intelligence APIs.
-Supports: FOFA, Quake, ZoomEye, 微步在线, ThreatBook, Shodan, Censys, BinaryEdge.
+Supports: FOFA, Quake, ZoomEye, 微步在线, ThreatBook, Shodan, Censys, BinaryEdge,
+Hunter(鹰图), Netlas, VirusTotal, SecurityTrails.
 All adapters share a common interface and respect rate limits.
 """
 from __future__ import annotations
@@ -520,6 +521,186 @@ class BinaryEdgeAdapter(DataSourceAdapter):
         return assets
 
 
+class HunterAdapter(DataSourceAdapter):
+    """Hunter 鹰图 API adapter (hunter.qianxin.com)."""
+
+    @property
+    def name(self) -> str:
+        return "hunter"
+
+    @property
+    def base_url(self) -> str:
+        return "https://hunter.qianxin.com/openApi"
+
+    def _build_request(self, query: str, page: int, size: int) -> tuple[str, dict, dict]:
+        headers = {"User-Agent": random_user_agent()}
+        # Hunter 要求查询语法 base64 编码（与 FOFA 同风格）
+        search = base64.b64encode(query.encode()).decode()
+        params = {
+            "api-key": self.api_key,
+            "search": search,
+            "page": page,
+            "page_size": min(size, 100),
+        }
+        return f"{self.base_url}/search", headers, params
+
+    def _parse_response(self, data: dict, query: str) -> list[dict[str, Any]]:
+        if data.get("code") != 200:
+            return []
+        payload = data.get("data") or {}
+        assets = []
+        for item in payload.get("arr", []):
+            assets.append({
+                "type": "host",
+                "value": item.get("url", ""),
+                "ip": item.get("ip", ""),
+                "port": item.get("port", ""),
+                "protocol": item.get("protocol", ""),
+                "domain": item.get("domain", ""),
+                "title": item.get("web_title", ""),
+                "status": item.get("status_code", ""),
+                "component": item.get("component", []),
+                "isp": item.get("isp", ""),
+                "city": item.get("city", ""),
+                "updated_at": item.get("updated_at", ""),
+                "source": "hunter",
+                "query": query
+            })
+        return assets
+
+
+class NetlasAdapter(DataSourceAdapter):
+    """Netlas API adapter (app.netlas.net)."""
+
+    @property
+    def name(self) -> str:
+        return "netlas"
+
+    @property
+    def base_url(self) -> str:
+        return "https://app.netlas.net/api"
+
+    def _build_request(self, query: str, page: int, size: int) -> tuple[str, dict, dict]:
+        headers = {"User-Agent": random_user_agent()}
+        params = {
+            "token": self.api_key,
+            "q": query,
+            "source_type": "service",
+            "start": (page - 1) * size,
+            "fields": "ip,port,protocol,transport,host,title,server,geo.org,geo.city,asn.number,asn.name",
+        }
+        return f"{self.base_url}/responses/", headers, params
+
+    def _parse_response(self, data: dict, query: str) -> list[dict[str, Any]]:
+        items = data.get("items") or []
+        assets = []
+        for item in items:
+            payload = (item.get("data") or {}).get("results") or {}
+            dns = payload.get("dns") or {}
+            geo = payload.get("geo") or {}
+            asn = payload.get("asn") or {}
+            assets.append({
+                "type": "host",
+                "value": payload.get("host", "") or item.get("ip", ""),
+                "ip": item.get("ip", ""),
+                "port": item.get("port", ""),
+                "protocol": item.get("protocol", ""),
+                "transport": item.get("transport", ""),
+                "title": (payload.get("http") or {}).get("title", ""),
+                "server": (payload.get("http") or {}).get("server", ""),
+                "org": (geo.get("org") or ""),
+                "city": (geo.get("city") or ""),
+                "asn": asn.get("number", ""),
+                "source": "netlas",
+                "query": query
+            })
+        return assets
+
+
+class VirusTotalAdapter(DataSourceAdapter):
+    """VirusTotal API adapter — 子域 + 历史解析（DNS 历史，绕 CDN 找真实源站线索）.
+
+    域名在 URL 路径中（非 query param），查询串透传 domain。
+    """
+
+    @property
+    def name(self) -> str:
+        return "virustotal"
+
+    @property
+    def base_url(self) -> str:
+        return "https://www.virustotal.com/api/v3"
+
+    def _build_request(self, query: str, page: int, size: int) -> tuple[str, dict, dict]:
+        headers = {"x-apikey": self.api_key, "User-Agent": random_user_agent()}
+        domain = quote(query.strip(), safe=".")
+        # 免费额度 4 req/min：limit 上限收紧，额外间隔由 VIRUSTOTAL_DELAY_RANGE 承担
+        params = {"limit": min(size, 40)}
+        return f"{self.base_url}/domains/{domain}/subdomains", headers, params
+
+    def _parse_response(self, data: dict, query: str) -> list[dict[str, Any]]:
+        payload = data.get("data") or []
+        assets = []
+        for item in payload:
+            attrs = item.get("attributes") or {}
+            assets.append({
+                "type": "subdomain",
+                "value": attrs.get("id", item.get("id", "")),
+                "last_dns_records": [
+                    r.get("value", "") for r in (attrs.get("last_dns_records") or [])
+                    if r.get("value")
+                ],
+                "reputation": attrs.get("reputation"),
+                "source": "virustotal",
+                "query": query
+            })
+        return assets
+
+
+class SecurityTrailsAdapter(DataSourceAdapter):
+    """SecurityTrails API adapter — 子域 + 历史 A 记录（DNS 历史/真实 IP 线索）."""
+
+    @property
+    def name(self) -> str:
+        return "securitytrails"
+
+    @property
+    def base_url(self) -> str:
+        return "https://api.securitytrails.com/v1"
+
+    def _build_request(self, query: str, page: int, size: int) -> tuple[str, dict, dict]:
+        headers = {
+            "APIKEY": self.api_key,
+            "Accept": "application/json",
+            "User-Agent": random_user_agent(),
+        }
+        domain = quote(query.strip(), safe=".")
+        return f"{self.base_url}/domain/{domain}/subdomains", headers, {}
+
+    def _parse_response(self, data: dict, query: str) -> list[dict[str, Any]]:
+        assets = []
+        # /subdomains 返回 {"subdomains": [...]}（前缀，非全名）
+        for prefix in (data.get("subdomains") or []):
+            assets.append({
+                "type": "subdomain",
+                "value": f"{prefix}.{query.strip()}",
+                "source": "securitytrails",
+                "query": query
+            })
+        # /history/dns/a 返回 {"records": [{"host", "ips": [...], "first_seen", "last_seen"}]}
+        for record in (data.get("records") or []):
+            assets.append({
+                "type": "dns_history",
+                "value": record.get("host", query.strip()),
+                "ips": record.get("ips") or [],
+                "first_seen": record.get("first_seen", ""),
+                "last_seen": record.get("last_seen", ""),
+                "source": "securitytrails",
+                "query": query
+            })
+        return assets
+
+
 # Registry of all adapters
 ADAPTERS: dict[str, type[DataSourceAdapter]] = {
     "fofa": FOFAAdapter,
@@ -530,6 +711,10 @@ ADAPTERS: dict[str, type[DataSourceAdapter]] = {
     "shodan": ShodanAdapter,
     "censys": CensysAdapter,
     "binaryedge": BinaryEdgeAdapter,
+    "hunter": HunterAdapter,
+    "netlas": NetlasAdapter,
+    "virustotal": VirusTotalAdapter,
+    "securitytrails": SecurityTrailsAdapter,
 }
 
 

@@ -69,7 +69,7 @@ class SubdomainEnumTool(BaseTool):
     name = "subdomain_enum"
     description = "子域名枚举与递归拓线：8 类数据源（CT/OTX/RapidDNS/HackerTarget/urlscan/SAN/字典/递归）+ 存活解析"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = SubdomainParams
 
     def __init__(self, settings: Settings | None = None, delay_range: tuple[float, float] | None = None) -> None:

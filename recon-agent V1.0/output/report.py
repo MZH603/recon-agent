@@ -21,7 +21,7 @@ class ReconData:
 
     target: str
     scan_level: int = 0
-    strategy_note: str = "L0 纯被动"
+    strategy_note: str = "L1 基础侦察（被动采集 + 隐蔽端口）"
     dns: dict = field(default_factory=dict)
     subdomains: list[str] = field(default_factory=list)
     alive_hosts: list[str] = field(default_factory=list)   # 存活解析结果（精准扫描过滤后）
@@ -41,6 +41,11 @@ class ReconData:
     workspace_notes: list[dict] = field(default_factory=list)
     threat_models: list[dict] = field(default_factory=list)
     cves: list[dict] = field(default_factory=list)
+    # ---- 情报扩容（L0 被动，第三方平台；collectors/intel_expander.py 填充）----
+    mapping_assets: list[dict] = field(default_factory=list)  # 测绘引擎资产
+    org_info: dict = field(default_factory=dict)              # 邮箱/ICP/ASN/企业
+    code_leaks: list[dict] = field(default_factory=list)      # 代码泄漏（密钥已脱敏）
+    dork_findings: list[dict] = field(default_factory=list)   # 搜索引擎 dorking
     doubts: list[str] = field(default_factory=list)     # 存疑清单
     degraded: list[str] = field(default_factory=list)   # 降级清单
     next_steps: list[dict] = field(default_factory=list)
@@ -108,6 +113,7 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
         if records:
             lines += ['### ' + title, '']
             lines += ['- ' + _table_cell(item.get('title', '')) + ': ' + _table_cell(item.get('content', '')) for item in records] + ['']
+    lines += _intel_expansion_section(data)
     lines += ["## 5. 关联资产拓线图", "", "```mermaid", "graph TD"]
     lines.append(f'  T["{data.target}"]')
     tech_by_host: dict[str, str] = {}
@@ -158,6 +164,74 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
 
 def _table_cell(value) -> str:
     return str(value).replace('\n', ' ').replace('\r', ' ').replace('|', r'\|').replace('`', r'\`')
+
+
+def _intel_expansion_section(data: ReconData) -> list[str]:
+    """情报扩容章节（L0 第三方平台）：测绘引擎/组织人员/代码泄漏/dorking。
+
+    未启用的通道显式声明原因（未配置 Key），不静默留空（HARD：不编造）。
+    """
+    lines: list[str] = ["## 4b. 情报扩容（外部平台，L0 被动）", ""]
+
+    lines += ["### 测绘引擎资产面", ""]
+    if data.mapping_assets:
+        lines += ["| 来源 | 类型 | 资产 | 端口/协议 | 标题/组件 |", "|---|---|---|---|---|"]
+        for a in data.mapping_assets[:30]:
+            lines.append("| " + " | ".join(_table_cell(a.get(k, "")) for k in
+                                           ("source", "type", "value", "port", "title")) + " |")
+        lines.append("")
+    else:
+        lines += ["未启用或无产出（缺 API Key，见采集备注）", ""]
+
+    lines += ["### 组织与人员情报", ""]
+    org = data.org_info
+    if org:
+        if org.get("whois_org"):
+            lines.append(f"- 注册组织: {_table_cell(org['whois_org'])}（来源: WHOIS）")
+        if org.get("emails"):
+            lines.append("- 邮箱: " + ", ".join(
+                _table_cell(e.get("email", "")) for e in org["emails"][:10]))
+        else:
+            lines.append("- 邮箱: 未检出（主站/WHOIS 均未暴露）")
+        if org.get("role_account_candidates"):
+            lines.append("- 角色账号候选 [未确认]: " + ", ".join(org["role_account_candidates"]))
+        icp = org.get("icp") or {}
+        lines.append(f"- ICP 备案: {_table_cell(icp.get('status', 'skipped'))}"
+                     + (f" — {_table_cell(str(icp.get('reason', ''))[:120])}" if icp.get("reason") else ""))
+        for entry in (org.get("asn") or [])[:3]:
+            lines.append(f"- ASN: {_table_cell(entry.get('ip', ''))} → {_table_cell(entry.get('asn', ''))}"
+                         + (f"（{entry.get('error', '')}）" if entry.get("error") else ""))
+        lines.append("")
+    else:
+        lines += ["未启用", ""]
+
+    lines += ["### 代码泄漏面（密钥已脱敏，定性需人工核实）", ""]
+    if data.code_leaks:
+        lines += ["| 仓库 | 路径 | 最高级别 | 密钥类型（脱敏指纹） |", "|---|---|---|---|"]
+        for item in data.code_leaks[:20]:
+            types = ", ".join(
+                f"{s.get('type')}({s.get('masked', '')})" for s in item.get("secrets", [])) or "—"
+            lines.append("| " + " | ".join(_table_cell(v) for v in (
+                item.get("repo", ""), item.get("path", ""), item.get("worst", ""), types)) + " |")
+        lines.append("")
+    else:
+        lines += ["未启用或无命中（缺 GITHUB_API_KEY 时声明于采集备注）", ""]
+
+    lines += ["### 搜索引擎 dorking（仅记录结果条目，未抓取目标页面）", ""]
+    if data.dork_findings:
+        lines += ["| dork | 意图 | 级别 | 命中 | 示例结果 |", "|---|---|---|---|---|"]
+        for r in data.dork_findings[:15]:
+            sample = ""
+            if r.get("hits"):
+                first = r["hits"][0]
+                sample = f"{first.get('title', '')} ({first.get('url', '')})"[:120]
+            lines.append("| " + " | ".join(_table_cell(v) for v in (
+                r.get("dork", ""), r.get("intent", ""), r.get("severity", ""),
+                r.get("hit_count", 0), sample)) + " |")
+        lines.append("")
+    else:
+        lines += ["未启用或无产出", ""]
+    return lines
 
 
 def _tech_card_md(card: dict) -> str:

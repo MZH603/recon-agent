@@ -5,7 +5,7 @@ from tools.builtin.fingerprint import FingerprintParams, FingerprintTool
 from utils.config import Settings, get_settings
 from utils.logger import ok, warn
 
-MAX_HOSTS = 12  # HARD: L0 阶段对子域指纹探测上限（礼貌节奏，避免批量请求目标）
+MAX_HOSTS = 12  # HARD: L1 基础侦察对子域指纹探测上限（礼貌节奏，避免批量请求目标）
 
 
 CONCURRENT_FINGERPRINT = 3  # HARD: 并发指纹主机上限（不同主机并行，每主机仍限速）

@@ -35,7 +35,62 @@ def enforce_stealth(tool: str, args: list[str], settings: Settings | None = None
     - nmap：剔除禁用扫描类型（-sS/-sU/-A/-sV…）与时序加速模板，补齐 NMAP_ARGS_SAFE；
     - 其他工具：原样透传（限速由 RateLimiter 层强制）。
     """
+    return enforce_stealth_level(tool, args, settings, level=0, tier1=False)
+
+
+def enforce_stealth_level(tool: str, args: list[str], settings: Settings | None = None,
+                          level: int = 0, tier1: bool = False) -> tuple[list[str], list[str]]:
+    """级别感知修正：L0-L2 行为与历史逐字节一致；仅 L3+逐项确认的 tier1 放行低强度白名单。
+
+    tier1（HARD 仍强制）：仅 NMAP_ARGS_L3_TIER1 白名单；--version-intensity ≤2；
+    --max-rate 任何显式声明被覆盖为 L3_SYNSCAN_MAX_RATE；--max-parallelism 恒为 1；
+    时序模板仍然禁止。
+    """
     s = settings or get_settings()
+    if level < 3 or not tier1:
+        return _enforce_stealth_base(tool, args, s)
+    if tool != "nmap":
+        return args, []
+    tier1_flags = set(s.NMAP_ARGS_L3_TIER1)
+    out: list[str] = []
+    corrections: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in tier1_flags:
+            out.append(arg)
+            if arg == "--version-intensity" and i + 1 < len(args):  # 强度上限 2
+                try:
+                    intensity = min(int(args[i + 1]), 2)
+                except ValueError:
+                    intensity = 2
+                out.append(str(intensity))
+                i += 2
+                continue
+            i += 1
+            continue
+        if arg == "--max-rate":  # HARD: 显式速率声明一律被上限覆盖
+            i += 2 if (i + 1 < len(args) and args[i + 1].isdigit()) else 1
+            continue
+        if arg in s.FORBIDDEN_NMAP_ARGS or arg.startswith("-T"):
+            corrections.append(f"tier1 白名单外剔除 {arg}")
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    # 强制注入低速率上限（tier1 扫描类型由白名单参数携带，不再注入 -sT）
+    if not any(a in tier1_flags for a in out):
+        out.insert(0, "-sT")
+    for flag, val in (("--max-rate", str(s.L3_SYNSCAN_MAX_RATE)), ("--max-parallelism", "1")):
+        if flag not in out:
+            out[0:0] = [flag, val]
+    if corrections:
+        audit("stealth_correction_l3", {"tool": tool, "corrections": corrections})
+    return out, corrections
+
+
+def _enforce_stealth_base(tool: str, args: list[str], s: Settings) -> tuple[list[str], list[str]]:
+    """历史 enforce_stealth 主体（L0-L2 行为逐字节不变）。"""
     corrections: list[str] = []
     if tool != "nmap":
         return args, corrections
@@ -53,9 +108,10 @@ def enforce_stealth(tool: str, args: list[str], settings: Settings | None = None
             continue
         out.append(arg)
         i += 1
-    for safe in s.NMAP_ARGS_SAFE:
-        if safe not in out:
-            out.insert(0, safe)
+    # 修复（历史 bug）：逐项 insert(0) 会使 SAFE 块顺序倒置（"1" 落到 "--max-rate" 前，
+    # nmap 把 "1" 当目标、"-sT" 被 --max-rate 吞掉）。改为整块前插，保持 NMAP_ARGS_SAFE 原序。
+    prefix = [safe for safe in s.NMAP_ARGS_SAFE if safe not in out]
+    out[0:0] = prefix
     if corrections:
         audit("stealth_correction", {"tool": tool, "corrections": corrections})
     return out, corrections

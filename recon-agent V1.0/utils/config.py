@@ -86,12 +86,37 @@ class Settings(BaseModel):
     FORBIDDEN_NMAP_ARGS: list[str] = ["-sS", "-sU", "-A", "-sV", "--version-all"]     # HARD: 禁止项
 
     # ---- 扫描深度门控（HARD）----
-    SCAN_LEVEL_DEFAULT: int = 0            # 默认 L0 纯被动
+    # 级别体系（v1.1 起三级）：L1 基础侦察（被动采集+隐蔽端口扫描，一次确认）
+    # / L2 深度探测（三级门控）/ L3 自适应低扰动激进（沿用 L2 强度）。
+    # 原 L0 纯被动档已并入 L1；gate 内部 0 值仅表示"未解锁"（不执行任何采集）。
+    SCAN_LEVEL_DEFAULT: int = 1            # 默认 L1 基础侦察
     GATE_CONFIRM_CODES: tuple[str, str, str] = ("CONFIRM 2", "{target}", "I UNDERSTAND AND AUTHORIZE")
-    GATE_PER_STEP_CONFIRM: bool = True     # L2 逐项确认
+    GATE_CONFIRM_CODES_L3: tuple[str, str, str] = ("CONFIRM 3", "{target}", "I UNDERSTAND AND AUTHORIZE")
+    GATE_PER_STEP_CONFIRM: bool = True     # L2/L3 逐项确认
     GATE_SESSION_SCOPED: bool = True       # 三级确认仅当次会话有效
-    GATE_DISABLE_IN_BATCH: bool = True     # 非交互模式禁止 L2
-    GATE_LEVEL2_REQUIRES_TTY: bool = True  # --level 2 必须 TTY
+    GATE_DISABLE_IN_BATCH: bool = True     # 非交互模式禁止 L2/L3
+    GATE_LEVEL2_REQUIRES_TTY: bool = True  # --level 2/3 必须 TTY
+
+    # ---- L3 自适应低扰动（HARD：绝对底线=不影响目标正常活动，熔断即停）----
+    L3_DELAY_FLOOR: tuple[float, float] = (2.0, 5.0)    # 目标耐受时的延迟下界
+    L3_DELAY_CEIL: tuple[float, float] = (8.0, 20.0)    # 目标不适时的延迟上界
+    L3_COOLDOWN_RANGE: tuple[float, float] = (60.0, 300.0)   # 冷却时长（Retry-After 优先）
+    L3_BLOCK_SUSPEND_THRESHOLD: int = 3   # 连续阻断次数 → 熔断该主机（sampling_suspended）
+    L3_RTT_DOUBLE_FACTOR: float = 2.0     # RTT 超基线倍数 → wary
+    L3_SUCCESS_RELAX_STREAK: int = 5      # 连续成功次数 → 向 floor 收敛一档
+    L3_MAX_RETRIES: int = 1               # HARD: 仅连接层失败重试 1 次（退避≥10s）；4xx/5xx 是答案不重试
+    L3_RETRY_BACKOFF: float = 10.0        # 连接层重试退避下限（秒）
+    L3_CONCURRENCY: int = 2               # L3 全局并发默认（per-host 仍串行）
+    L3_CONCURRENCY_HARD: int = 4          # L3 全局并发绝对上限
+    L3_MAX_REQUESTS_PER_HOST: int = 30    # HARD: L3 单主机请求预算
+    DNS_WORDLIST_L3_CAP: int = 5000       # HARD: L3 DNS 字典上限（打公共解析器，不碰目标 NS）
+    DNS_BRUTE_L3_CONCURRENCY: int = 10    # L3 DNS 爆破并发（仅公共解析器查询）
+    DIR_PATHS_L3_CAP: int = 300           # HARD: L3 目录枚举路径上限
+    VHOST_WORDLIST_CAP: int = 200         # HARD: vhost 候选上限
+    CLOUD_BUCKET_CAP: int = 40            # HARD: 云存储 bucket 候选上限
+    L3_SYNSCAN_MAX_RATE: int = 10         # HARD: tier1 SYN 扫描速率上限（nmap --max-rate）
+    L3_UDP_PORTS: str = "53,123,161,500,514,1900"   # tier1 UDP 探测端口（低强度白名单）
+    NMAP_ARGS_L3_TIER1: list[str] = ["-sS", "-sU", "-sV", "--version-intensity"]  # 仅 level==3 且逐项确认后放行
 
     # ---- Token / 上下文 ----
     CONTEXT_BUDGET: int = Field(default=100_000, gt=0)
@@ -167,6 +192,29 @@ class Settings(BaseModel):
     CENSYS_API_SECRET: str = ""
     BINARYEDGE_API_KEY: str = ""
     BINARYEDGE_API_SECRET: str = ""
+    HUNTER_API_KEY: str = ""            # 鹰图 hunter.qianxin.com
+    HUNTER_API_SECRET: str = ""
+    NETLAS_API_KEY: str = ""            # app.netlas.net
+    NETLAS_API_SECRET: str = ""
+    VIRUSTOTAL_API_KEY: str = ""        # 免费额度 4 req/min（延迟已相应放宽）
+    VIRUSTOTAL_API_SECRET: str = ""
+    SECURITYTRAILS_API_KEY: str = ""    # 子域 + 历史 A 记录（DNS 历史）
+    SECURITYTRAILS_API_SECRET: str = ""
+    # 新数据源限速（datasource 适配器按 {NAME}_DELAY_RANGE 反射读取；未定义走默认 (3,10)）
+    VIRUSTOTAL_DELAY_RANGE: tuple[float, float] = (20.0, 40.0)   # 4 req/min
+    HUNTER_DELAY_RANGE: tuple[float, float] = (2.0, 5.0)
+
+    # ---- 情报扩容源（Phase A：代码泄漏/组织情报/dorking）----
+    GITHUB_API_KEY: str = ""            # GitHub PAT（code search 强制认证）
+    GITEE_API_KEY: str = ""             # Gitee 私人令牌（可选）
+    ICP_API_URL: str = ""               # ICP 备案查询 HTTP 模板（含 {domain} 占位符）；空=跳过
+    ICP_API_KEY: str = ""               # ICP 查询源鉴权（随源而定）
+    ORG_API_BASE: str = ""              # 企业信息 API 通用插槽（企查查/天眼查等自配）
+    ORG_API_KEY: str = ""
+    DORK_MAX_REQUESTS: int = 20         # HARD: dork_search 出站请求总预算
+    DORK_BACKENDS: list[str] = ["duckduckgo", "baidu"]  # 依次降级；exa/perplexity 需 env key
+    CODELEAK_MAX_DORKS: int = 10        # HARD: code_leak_search dork 查询预算
+    CODELEAK_MAX_RESULTS: int = 30      # 单 dork 收录结果上限
 
     @classmethod
     def load(cls, config_path: Path | None = None) -> "Settings":

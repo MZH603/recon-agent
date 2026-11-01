@@ -1,0 +1,57 @@
+# Dork 搜索模板库（热加载；{domain} 占位符）
+# 只记录搜索引擎结果页条目，绝不抓取目标页面（HARD）
+meta:
+  version: "1.0.0"
+  updated: "2026-11-01"
+
+dorks:
+  # 敏感文件（最高价值）
+  - query: "site:{domain} filetype:xls OR filetype:xlsx OR filetype:doc"
+    intent: "敏感表格/文档被索引"
+    severity: "Medium"
+  - query: "site:{domain} filetype:sql OR filetype:bak OR filetype:backup"
+    intent: "数据库/备份文件暴露"
+    severity: "High"
+  - query: "site:{domain} filetype:log OR filetype:txt 密码 OR password"
+    intent: "日志/口令文件被索引"
+    severity: "High"
+  - query: "site:{domain} filetype:env OR filetype:ini OR filetype:conf"
+    intent: "配置文件暴露"
+    severity: "High"
+  - query: "site:{domain} filetype:pdf 合同 OR 名单 OR 身份证"
+    intent: "敏感 PDF 被索引"
+    severity: "Medium"
+  # 后台与管理面
+  - query: "site:{domain} inurl:admin OR inurl:manage OR inurl:console"
+    intent: "后台入口"
+    severity: "Medium"
+  - query: "site:{domain} inurl:login OR inurl:signin OR intitle:登录"
+    intent: "登录入口"
+    severity: "Info"
+  - query: "site:{domain} intitle:后台 OR intitle:管理 OR intitle:dashboard"
+    intent: "中文后台入口"
+    severity: "Medium"
+  # API 与文档
+  - query: "site:{domain} inurl:swagger OR inurl:api-docs OR inurl:swagger-ui"
+    intent: "API 文档暴露"
+    severity: "Medium"
+  - query: "site:{domain} inurl:graphql OR inurl:rest OR inurl:api/v1"
+    intent: "API 面"
+    severity: "Info"
+  - query: "site:{domain} filetype:json api OR interface OR 接口"
+    intent: "接口描述文件"
+    severity: "Low"
+  # 目录与测试残留
+  - query: "site:{domain} intitle:\"Index of\" OR intitle:\"Directory listing\""
+    intent: "目录列表开启"
+    severity: "High"
+  - query: "site:{domain} inurl:test OR inurl:dev OR inurl:uat OR inurl:beta"
+    intent: "测试/预发环境暴露"
+    severity: "Medium"
+  - query: "site:{domain} filetype:pdf OR filetype:docx 组织架构 OR 员工"
+    intent: "组织架构文件"
+    severity: "Medium"
+  # 云与组件线索
+  - query: "site:{domain} inurl:oss OR inurl:cos OR inurl:bucket OR inurl:s3"
+    intent: "云存储线索"
+    severity: "Medium"

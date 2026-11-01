@@ -68,16 +68,25 @@ class DeepFingerprintTool(BaseTool):
 
         responses: dict[str, str] = {}
         probes = 0
-        for technique in REGISTRY:
-            paths = technique.paths() if callable(technique.paths) else technique.paths
-            for path in paths:
-                if probes >= PROBE_LIMIT:  # HARD: 请求上限
+        tech_paths = [(t, (t.paths() if callable(t.paths) else t.paths)) for t in REGISTRY]
+        # Phase 1: 每插件保底 1 路径（修复预算被前序插件吃光）
+        for _tech, paths in tech_paths:
+            if probes >= PROBE_LIMIT:  # HARD: 请求上限
+                break
+            for path in paths[:1]:
+                if path not in responses:
+                    responses[path] = await self._get(f"{scheme}://{netloc}{path}")
+                    probes += 1
+        # Phase 2: 剩余预算按注册序填充
+        for _tech, paths in tech_paths:
+            if probes >= PROBE_LIMIT:
+                break
+            for path in paths[1:]:
+                if probes >= PROBE_LIMIT:
                     break
                 if path not in responses:
                     responses[path] = await self._get(f"{scheme}://{netloc}{path}")
                     probes += 1
-            if probes >= PROBE_LIMIT:
-                break
 
         # Phase 2: 跟进路径（JS 文件等，由插件从 Phase 1 响应中发现）
         follow_budget = 5  # HARD: 跟进抓取上限

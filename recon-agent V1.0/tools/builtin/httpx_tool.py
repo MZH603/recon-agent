@@ -25,7 +25,7 @@ class HttpxProbeTool(BaseTool):
     name = "httpx_probe"
     description = "单次只读 GET 探活：状态码/标题/跳转（被动 L0）"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = HttpxParams
 
     def __init__(self, settings: Settings | None = None) -> None:

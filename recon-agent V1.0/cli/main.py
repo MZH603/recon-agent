@@ -37,10 +37,11 @@ console = Console()
 BANNER = (
     "[bold cyan]recon-agent[/bold cyan] [bold]V1.0[/bold] — 信息搜集 AI Agent\n"
     "[yellow]合规声明：仅用于已获合法授权的安全测试。隐蔽性与目标可用性第一，"
-    "默认 L0 受控采集，部分指纹与 SAN 查询会接触远端。[/yellow]"
+    "默认 L1 基础侦察（被动采集 + 隐蔽端口，一次确认），指纹与 SAN 查询会接触远端。[/yellow]"
 )
 
-PROFILE_LEVELS = {"passive": 0, "stealth": 1, "aggressive": 2}
+# v1.1 级别合并：L0 已并入 L1（基础侦察 = 被动采集 + 隐蔽端口扫描，一次确认）
+PROFILE_LEVELS = {"passive": 1, "stealth": 1, "aggressive": 2, "l3": 3}
 
 
 def _version_callback(value: bool) -> None:
@@ -68,8 +69,8 @@ def run(
     ctx: typer.Context,
     target: str = typer.Option(None, "-t", "--target", help="目标：域名/IP/URL/CIDR（MCP 模式可不填）"),
     authorized: bool = typer.Option(False, "--authorized", help="声明已获合法授权（必需）"),
-    profile: str = typer.Option("passive", "--profile", help="passive=L0 / stealth=L1 / aggressive=L2"),
-    level: int = typer.Option(None, "--level", min=0, max=2, help="扫描深度（2 仍需三级门控+TTY）"),
+    profile: str = typer.Option("passive", "--profile", help="passive/stealth=L1 基础侦察（被动+隐蔽端口，一次确认）/ aggressive=L2 / l3=自适应低扰动激进"),
+    level: int = typer.Option(None, "--level", min=0, max=3, help="扫描深度（2/3 仍需三级门控+TTY；L3 另含 tier1 逐项确认）"),
     model: str = typer.Option(None, "--model", help="任意 LiteLLM 支持的模型名"),
     batch: bool = typer.Option(False, "--batch", help="非交互模式（HARD：永久禁止 L2）"),
     lab: bool = typer.Option(False, "--lab", help="实验环境模式：解锁内网/环回目标（仅限自有/自建环境）"),
@@ -226,7 +227,7 @@ def run(
             return await full_cascade(
                 target=target, authorized=True, level=requested,
                 auto_confirm=auto_confirm, note=note, settings=settings)
-        # batch 模式或级别为 0：至少执行 L0（被动测绘），确保任何模式起点均为 L0
+        # batch 模式或级别 ≥1：执行 L1 基础侦察流水线（L0 已并入 L1；级别 0 在流水线内拒绝）
         return await pipeline.run_pipeline(
             target=target, settings=settings, batch=batch, is_tty=is_tty,
             requested_level=max(requested, 0), model_override=model,

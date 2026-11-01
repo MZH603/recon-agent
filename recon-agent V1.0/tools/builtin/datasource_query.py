@@ -1,9 +1,13 @@
 """builtin 数据源查询工具（L0 被动：外部威胁情报 API 聚合查询）。
-支持：FOFA、Quake、ZoomEye、微步在线、ThreatBook、Shodan、Censys、BinaryEdge。
+支持：FOFA、Quake、ZoomEye、微步在线、ThreatBook、Shodan、Censys、BinaryEdge、
+Hunter(鹰图)、Netlas、VirusTotal、SecurityTrails。
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -27,9 +31,9 @@ class DataSourceQueryTool(BaseTool):
     """外部威胁情报数据源聚合查询（L0 被动）。"""
 
     name = "datasource_query"
-    description = "聚合查询多个外部威胁情报平台：FOFA/Quake/ZoomEye/微步/ThreatBook/Shodan/Censys/BinaryEdge（被动 L0）"
+    description = "聚合查询外部威胁情报平台：FOFA/Quake/ZoomEye/微步/ThreatBook/Shodan/Censys/BinaryEdge/Hunter/Netlas/VirusTotal/SecurityTrails（被动 L0）"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = DataSourceQueryParams
 
     def __init__(self, settings: Settings | None = None) -> None:
@@ -84,6 +88,14 @@ class DataSourceQueryTool(BaseTool):
         if errors:
             evidence.append(f"错误: {'; '.join(errors)}")
 
+        # HARD: source_hash 绑定聚合载荷（证据链完整性）
+        source_hash = hashlib.sha256(
+            json.dumps(
+                {"target": params.target, "assets": all_assets}, sort_keys=True,
+                ensure_ascii=False, default=str,
+            ).encode("utf-8", errors="replace")
+        ).hexdigest()[:64]
+
         return ToolResult(
             name=self.name,
             success=len(all_assets) > 0 or len(errors) < len(valid_sources),
@@ -95,6 +107,6 @@ class DataSourceQueryTool(BaseTool):
                 "errors": errors
             },
             evidence=evidence,
-            source_hash="",
+            source_hash=source_hash,
             confidence=0.8 if all_assets else 0.3
         )

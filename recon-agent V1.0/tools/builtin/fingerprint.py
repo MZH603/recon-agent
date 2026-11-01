@@ -55,7 +55,7 @@ class FingerprintTool(BaseTool):
     name = "fingerprint"
     description = "单次 GET 识别 Web 技术栈：Server/中间件/语言/框架/CMS/版本/WAF/CDN（被动 L0，带来源）"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = FingerprintParams
 
     def __init__(self, settings: Settings | None = None, delay_range: tuple[float, float] | None = None) -> None:

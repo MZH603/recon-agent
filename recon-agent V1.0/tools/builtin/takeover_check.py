@@ -48,7 +48,7 @@ class TakeoverCheckTool(BaseTool):
     name = "takeover_check"
     description = "子域名接管候选检测：CNAME 悬空 + 托管商特征页（只读，L0）"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = TakeoverParams
 
     def __init__(self, settings: Settings | None = None, delay_range: tuple[float, float] | None = None) -> None:

@@ -192,7 +192,9 @@ recon-agent --session -t example.com --authorized -o reports --output-format jso
 | `quit` / `退出` / EOF | 保存并关闭，保留待确认节点 |
 | Ctrl+C | 安全关闭；未完成执行保留为恢复/不确定状态，不自动重试 |
 
-每个新进程从 L0 开始，`--level`/`--profile` 不预先授予会话权限。L1 需一次确认；L2 依次输入 `CONFIRM 2`、目标精确串、`I UNDERSTAND AND AUTHORIZE`，并逐动作确认。重启后重新确认。`--batch`/MCP 永久禁止 L2；非 TTY 默认不代填 L2 确认，授权自动化级联必须显式指定 `--auto-confirm`。该选项不替会话填写确认码。`--resume` 必须与 `--session` 搭配，会话不能与 `--mcp` 搭配。
+每个新进程从 L0（未解锁）开始，`--level`/`--profile` 不预先授予会话权限（v1.1 起 L0 已并入 L1 基础侦察：被动采集 + 隐蔽端口扫描，一次确认；`--profile passive` 为 `stealth` 的兼容别名）。L1 需一次确认；L2 依次输入 `CONFIRM 2`、目标精确串、`I UNDERSTAND AND AUTHORIZE`，并逐动作确认。L3（`--profile l3` / `--level 3`）沿用 L2 门控强度（确认码为 `CONFIRM 3`），在「不影响目标正常活动」的绝对底线上运行自适应低扰动主动侦察（扰动控制器退避/熔断，tier1 手段 SYN/UDP/-sV 需逐项确认）。重启后重新确认。`--batch`/MCP 永久禁止 L2/L3；非 TTY 默认不代填 L2/L3 确认，授权自动化级联必须显式指定 `--auto-confirm`。该选项不替会话填写确认码。`--resume` 必须与 `--session` 搭配，会话不能与 `--mcp` 搭配。
+
+情报扩容（L0 被动，`config.yaml` 配置 Key 即启用，未配置的通道在报告中声明「未启用」）：测绘引擎聚合（FOFA/Quake/ZoomEye/Shodan/Censys/BinaryEdge/Hunter/Netlas/VirusTotal/SecurityTrails）、组织与人员情报（邮箱/ICP 可插拔源/ASN/企业关联插槽）、代码仓库泄漏（GitHub/Gitee，疑似密钥脱敏输出）、搜索引擎 dorking（DuckDuckGo/百度后端链）。详见 `安全策略总览.md` §2.4 与 `docs/扫描能力实现细节.md`。
 
 报告始终保存三种格式，`--output-format` 选择控制台展示的文件，`-o` 指定目录。JSON 保存完整状态、工具 data/stdout/stderr、来源及哈希、失败、事件、冲突和执行日志。相同秒生成也不覆盖。模型摘要标为未验证分析；冲突观测保留双方；未完成/降级结果带水印。费用记录已知金额与未知定价调用数，未知价格时不能证明精确费用上限。累计 token 仅用于计量，不再作为任务上限。
 

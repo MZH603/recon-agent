@@ -36,7 +36,7 @@ class DNSQueryTool(BaseTool):
     name = "dns_query"
     description = "查询域名 A/MX/NS/TXT/SOA 等公开 DNS 记录（纯被动 L0）"
     risk_level = "低"
-    min_level = 0
+    min_level = 1  # v1.1: L0 已并入 L1（基础侦察）
     params_model = DNSParams
 
     def __init__(self, settings: Settings | None = None, delay_range: tuple[float, float] | None = None) -> None:

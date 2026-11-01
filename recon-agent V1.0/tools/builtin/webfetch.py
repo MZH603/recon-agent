@@ -24,6 +24,7 @@ def http_get(
     timeout: int = 10,
     insecure: bool = False,
     max_bytes: int = 200_000,
+    extra_headers: dict[str, str] | None = None,
 ) -> tuple[int, dict, str]:
     """共享同步 HTTP GET。
 
@@ -32,10 +33,15 @@ def http_get(
     - 4xx/5xx → 有效答案（WhatWeb 式：403 页头部暴露 CDN/WAF 特征）
     - 连接失败 → (0, {}, "")（匿名 kill-switch 触发时同样收敛为无答案，不泄露直连行为）
     HARD: 仅允许 http(s) scheme 出站；匿名启用时请求必须经配置出口。
+    extra_headers 仅供鉴权/内容协商头（Authorization/Accept 等）；User-Agent 不允许
+    覆盖（防档案不一致指纹，HARD）。
     """
     if not url.startswith(("http://", "https://")):
         raise ValueError(f"仅允许 http(s) URL: {url[:60]}")
-    req = urllib.request.Request(url, headers=request_headers())
+    headers = request_headers()
+    if extra_headers:
+        headers.update({k: v for k, v in extra_headers.items() if k.lower() != "user-agent"})
+    req = urllib.request.Request(url, headers=headers)
     try:
         started = time.monotonic()
         opener = build_opener(insecure=insecure)  # 匿名启用=经出口；未启用=直连（历史行为）
@@ -61,7 +67,7 @@ def http_get(
 
 
 def http_get_text(url: str, timeout: int = 10, insecure: bool = False,
-                  max_bytes: int = 200_000) -> str:
+                  max_bytes: int = 200_000, extra_headers: dict[str, str] | None = None) -> str:
     """便捷封装：返回响应体文本（连接失败返回空串）。"""
-    _, _, body = http_get(url, timeout, insecure, max_bytes)
+    _, _, body = http_get(url, timeout, insecure, max_bytes, extra_headers)
     return body

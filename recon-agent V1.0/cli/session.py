@@ -75,7 +75,7 @@ async def run_session(target, settings, batch, is_tty, requested_level, model_ov
         ok(f"报告已生成: {paths['selected']}")
     try:
         async with runtime:
-            info(f'会话 ID: {identifier} · 当前 L0，等待任务。')
+            info(f'会话 ID: {identifier} · 当前 L0（未解锁，L0 已并入 L1 基础侦察），等待任务。')
             info('恢复命令: recon-agent --session --resume ' + shlex.quote(identifier) +
                  ' -t ' + shlex.quote(target) + ' --authorized')
             info('命令: /new 新任务 · /budget cost USD · 状态/status · 报告/report · stop · abort · quit/退出')

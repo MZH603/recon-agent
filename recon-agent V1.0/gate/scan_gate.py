@@ -15,17 +15,23 @@ from utils.logger import audit
 ABORT_WORD = "abort"
 GENERIC_YES = {"y", "yes", "确认", "是", "ok", "1", "true", "confirm"}
 L2_STEP_CODE_1 = "CONFIRM 2"
+L3_STEP_CODE_1 = "CONFIRM 3"
 L2_STEP_CODE_3 = "I UNDERSTAND AND AUTHORIZE"
+L3_STEP_CODE_3 = "I UNDERSTAND AND AUTHORIZE"
 
 
 class ScanGate:
-    """扫描深度门控：L0 被动 / L1 一次确认 / L2 三次独立确认 + 签名 + 逐项确认。
+    """扫描深度门控：L1 基础侦察（一次确认）/ L2 三次独立确认+签名+逐项 / L3 沿用 L2 强度。
+
+    v1.1 合并说明：原 L0 纯被动档已并入 L1（基础侦察 = 被动采集 + 隐蔽端口扫描，
+    一次确认覆盖全部）。gate 内部级别 0 仅表示"未解锁"——不执行任何采集。
 
     HARD:
-    - batch_mode 或非 TTY 永久禁止 L2；--level 2 无 TTY 自动降级 L1 并报备；
+    - batch_mode 或非 TTY 永久禁止 L2/L3；--level 2/3 无 TTY 自动降级 L1 并报备；
     - 三级确认码不接受 y/yes/确认 等通用词；
     - 签名文件仅当次会话有效：构造时不读取任何旧签名，跨会话必须重签；
-    - 任意环节输入 abort 立即退回 L0 且不可撤销。
+    - L3 = 自适应低扰动（绝对底线：不影响目标正常活动，熔断即停；tier1 手段逐项确认）；
+    - 任意环节输入 abort 立即退回未解锁（级别 0）且不可撤销。
     """
 
     def __init__(
@@ -45,14 +51,16 @@ class ScanGate:
         self._aborted = False
         self._level = 0
         self._unlocked = False
+        self._unlocked_level = 0
         self._l2_next_step = 1
+        self._l3_next_step = 1
         self.confirm_log: list[dict] = []
         self.sig_path: Path | None = None
         self.downgrade_notice = ""
-        # HARD: 非交互场景请求 L2 → 自动降级 L1 并报备
+        # HARD: 非交互场景请求 L2/L3 → 自动降级 L1 并报备
         if requested_level >= 2 and (batch_mode or not is_tty):
             self._level = 1
-            self.downgrade_notice = "[门控] 非交互模式永久禁止 L2，已自动降级为 L1（HARD）"
+            self.downgrade_notice = "[门控] 非交互模式永久禁止 L2/L3，已自动降级为 L1（HARD）"
         else:
             self._level = min(requested_level, 1)
         audit("gate_init", {"target": target, "requested": requested_level,
@@ -60,13 +68,13 @@ class ScanGate:
 
     @property
     def level(self) -> int:
-        """当前生效级别（abort 后恒为 0）。"""
+        """当前生效级别（abort 后恒为 0=未解锁）。"""
         return 0 if self._aborted else self._level
 
     def current_level(self) -> int:
         return self.level
 
-    # ---------- L1：一次确认 ----------
+    # ---------- L1：一次确认（基础侦察 = 被动采集 + 隐蔽端口扫描） ----------
     async def request_level_1(self, purpose: str) -> bool:
         """L1 单次确认；batch/非 TTY 下无法交互确认，返回 False（只能由启动参数显式声明）。"""
         if self._aborted:
@@ -76,8 +84,8 @@ class ScanGate:
         if self.batch_mode or not self.is_tty:
             return False
         text = await self._ask(
-            f"[*] 请求进入 L1 隐蔽主动：{purpose}\n"
-            "    [🔒] 隐蔽约束全程生效：限速 3-10s / 伪装 UA / 仅 TCP Connect / 失败不重试\n"
+            f"[*] 请求进入 L1 基础侦察（被动采集 + 隐蔽端口扫描）：{purpose}\n"
+            "    [🔒] 隐蔽约束全程生效：被动礼貌间隔 / 主动限速 3-10s / 伪装 UA / 仅 TCP Connect / 失败不重试\n"
             "    输入 yes 授权（输入 abort 取消）："
         )
         answer = text.strip().lower()
@@ -137,22 +145,81 @@ class ScanGate:
 
     def unlock_level_2(self) -> None:
         """生成签名文件 auth/<target-hash>.sig（HARD：SHA256 + 时间戳 + 操作者指纹）。"""
+        self._unlock(2)
+
+    # ---------- L3：三次独立确认（沿用 L2 强度） ----------
+    async def request_level_3_step(self, step: int, plan: str = "") -> tuple[bool, str]:
+        """L3 三级确认：与 L2 同构（CONFIRM 3 / 目标精确串 / 责任声明）。"""
+        if self._aborted or self.batch_mode or not self.is_tty:
+            return False, ""  # HARD: 非交互永久禁止 L3
+        if step == 1:
+            self._l3_next_step = 1
+            text = await self._ask(
+                f"[!] 进入 L3（自适应低扰动激进模式）需三次独立确认（当前 1/3）\n"
+                f"    本次计划：{plan}\n"
+                f"    绝对底线：不影响目标正常活动；连续阻断将熔断该主机（绝不硬闯）。\n"
+                f"    请输入 {L3_STEP_CODE_1} 继续（不接受 y/yes/确认）："
+            )
+            if text.strip() == L3_STEP_CODE_1:
+                self._log_confirm("l3_step1", text)
+                return True, text
+            if text.strip().lower() == ABORT_WORD:
+                self.abort()
+            return False, text
+        if step == 2:
+            if self._l3_next_step != 2:
+                return False, ""
+            text = await self._ask(
+                f"[2/3] 请输入授权目标精确字符串（输入 \"{self.target}\" 继续，防误确认）："
+            )
+            if text.strip() == self.target:
+                self._log_confirm("l3_step2", text)
+                return True, text
+            if text.strip().lower() == ABORT_WORD:
+                self.abort()
+            return False, text
+        if step == 3:
+            if self._l3_next_step != 3:
+                return False, ""
+            text = await self._ask(
+                "[3/3] 最终确认：L3 全部动作逐项确认、tier1 手段（SYN/UDP/-sV 低强度）单独确认、"
+                f"可随时 abort 中止。\n    输入 {L3_STEP_CODE_3} 解锁："
+            )
+            if text.strip() == L3_STEP_CODE_3:
+                self._log_confirm("l3_step3", text)
+                self.unlock_level_3()
+                return True, text
+            if text.strip().lower() == ABORT_WORD:
+                self.abort()
+            return False, text
+        return False, ""
+
+    def unlock_level_3(self) -> None:
+        """生成 L3 签名文件（level 字段=3，verify_signature 校验级别匹配）。"""
+        self._unlock(3)
+
+    def _unlock(self, level: int) -> None:
+        """生成签名文件 auth/<target-hash>.sig（HARD：SHA256 + 时间戳 + 操作者指纹 + 级别）。"""
         operator = hashlib.sha256(
             f"{getpass.getuser()}@{platform.node()}".encode("utf-8")
         ).hexdigest()[:16]
         issued = time.strftime("%Y-%m-%dT%H:%M:%S")
-        sig = hashlib.sha256(f"{self.target}|{operator}|{issued}".encode("utf-8")).hexdigest()
+        sig = hashlib.sha256(
+            f"{self.target}|{operator}|{issued}|{level}".encode("utf-8")).hexdigest()
         self._auth_dir.mkdir(parents=True, exist_ok=True)
         target_key = hashlib.sha256(self.target.encode("utf-8")).hexdigest()
         self.sig_path = self._auth_dir / f"{target_key}.sig"
         self.sig_path.write_text(
             json.dumps({"target": self.target, "operator": operator,
-                        "issued": issued, "sig": sig}, ensure_ascii=False, indent=2),
+                        "issued": issued, "level": level, "sig": sig},
+                       ensure_ascii=False, indent=2),
             encoding="utf-8", newline="",
         )
         self._unlocked = True
-        self._level = 2
-        audit("l2_unlocked", {"target": self.target, "operator": operator, "sig_prefix": sig[:16]})
+        self._unlocked_level = level
+        self._level = level
+        audit(f"l{level}_unlocked", {"target": self.target, "operator": operator,
+                                     "sig_prefix": sig[:16]})
 
     def verify_signature(self) -> bool:
         """校验本会话生成的签名文件（HARD：不匹配拒绝；跨会话因 _unlocked=False 直接无效）。"""
@@ -161,20 +228,32 @@ class ScanGate:
         try:
             data = json.loads(self.sig_path.read_text(encoding="utf-8"))
             expected = hashlib.sha256(
-                f"{data['target']}|{data['operator']}|{data['issued']}".encode("utf-8")
+                f"{data['target']}|{data['operator']}|{data['issued']}|"
+                f"{data.get('level', 2)}".encode("utf-8")
             ).hexdigest()
-            return data.get("sig") == expected and data.get("target") == self.target
+            return (data.get("sig") == expected and data.get("target") == self.target
+                    and data.get("level", 2) == self._unlocked_level)
         except (OSError, ValueError, KeyError, TypeError):
             return False
 
-    # ---------- L2：逐项确认 ----------
-    async def confirm_step(self, action: str, command: str, risk: str) -> bool:
-        """L2 每个具体动作执行前手动确认（HARD：解锁不等于免确认，不可批量 yes）。"""
+    # ---------- L2/L3：逐项确认 ----------
+    async def confirm_step(self, action: str, command: str, risk: str, level: int = 2,
+                           tier: int = 0) -> bool:
+        """每个具体动作执行前手动确认（HARD：解锁不等于免确认，不可批量 yes）。
+
+        tier=1（L3 低强度主动手段：SYN/UDP/-sV）额外标注，单独决策。
+        """
         if self._aborted or self.batch_mode or not self.is_tty:
             return False
+        tier_note = ""
+        if tier == 1:
+            tier_note = ("\n    [tier1 低强度模式] 速率上限 ≤10、版本强度 ≤2、"
+                         "目标仍按可用性优先熔断")
         text = await self._ask(
-            f'<confirm level="2" action="{action}">\n'
-            f"    命令: {command}\n    风险: {risk}\n"
+            f'<confirm level="{level}"'
+            + (f' tier="{tier}"' if tier else "")
+            + f' action="{action}">\n'
+            f"    命令: {command}\n    风险: {risk}{tier_note}\n"
             "    输入 yes 执行 / abort 中止："
         )
         answer = text.strip().lower()
@@ -182,26 +261,31 @@ class ScanGate:
             self.abort()
             return False
         if answer in GENERIC_YES:
-            self._log_confirm("l2_action", text)
+            self._log_confirm(f"l{level}_action", text)
             return True
         return False
 
     def abort(self) -> None:
-        """立即退回 L0（HARD：中止不可撤销，需重新走完整门控）。"""
+        """立即退回未解锁（级别 0）（HARD：中止不可撤销，需重新走完整门控）。"""
         self._aborted = True
         self._unlocked = False
+        self._unlocked_level = 0
         self._l2_next_step = 1
+        self._l3_next_step = 1
         self._level = 0
         audit("gate_abort", {"target": self.target})
 
     # ---------- 内部 ----------
     def _log_confirm(self, kind: str, text: str) -> None:
-        if kind == "l2_step1":
+        if kind in ("l2_step1", "l3_step1"):
             self._l2_next_step = 2
-        elif kind == "l2_step2":
+            self._l3_next_step = 2
+        elif kind in ("l2_step2", "l3_step2"):
             self._l2_next_step = 3
-        elif kind == "l2_step3":
+            self._l3_next_step = 3
+        elif kind in ("l2_step3", "l3_step3"):
             self._l2_next_step = 1
+            self._l3_next_step = 1
         self.confirm_log.append({"kind": kind, "text": text.strip(), "ts": time.time()})
         audit("gate_confirm", {"kind": kind, "target": self.target})
 
