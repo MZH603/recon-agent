@@ -1,1 +1,0 @@
-start SnowShadow.exe

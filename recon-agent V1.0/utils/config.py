@@ -116,7 +116,14 @@ class Settings(BaseModel):
     CLOUD_BUCKET_CAP: int = 40            # HARD: 云存储 bucket 候选上限
     L3_SYNSCAN_MAX_RATE: int = 10         # HARD: tier1 SYN 扫描速率上限（nmap --max-rate）
     L3_UDP_PORTS: str = "53,123,161,500,514,1900"   # tier1 UDP 探测端口（低强度白名单）
-    NMAP_ARGS_L3_TIER1: list[str] = ["-sS", "-sU", "-sV", "--version-intensity"]  # 仅 level==3 且逐项确认后放行
+    NMAP_ARGS_L3_TIER1: list[str] = ["-sS", "-sU", "-sV", "--version-intensity",
+                                     "-O", "--osscan-limit"]  # 仅 level==3 且逐项确认后放行
+    PTR_L3_CAP: int = 100                 # HARD: 反向 DNS PTR 查询上限（打公共 DoH，零目标接触）
+    ALIVE_PROBE_CAP: int = 50             # HARD: 存活探测主机数上限（仅授权范围内主机）
+    ALIVE_PROBE_CONCURRENCY: int = 5      # 存活探测并发（ICMP ×1 + TCP 兜底）
+    TRACEROUTE_MAX_HOPS: int = 15         # HARD: 拓扑追踪最大跳数（-h/-m）
+    TRACEROUTE_HOST_CAP: int = 8          # HARD: 拓扑追踪主机数上限
+    PARAM_PROBE_L3_CAP: int = 80          # HARD: 参数挖掘请求预算（含基线）
 
     # ---- Token / 上下文 ----
     CONTEXT_BUDGET: int = Field(default=100_000, gt=0)

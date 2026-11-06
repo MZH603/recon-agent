@@ -190,14 +190,24 @@ def build_default(settings: Settings, gate: ScanGate, main_target: str, *, sessi
     from tools.builtin.cloud_enum import CloudEnumTool
     from tools.builtin.dir_enum_deep import DirEnumDeepTool
     from tools.builtin.api_doc_probe import ApiDocProbeTool
-    registry.register(NmapL3Tool(settings))         # L3 tier1：SYN/UDP/version（低强度白名单）
+    from tools.builtin.reverse_dns import ReverseDnsTool
+    from tools.builtin.alive_os_probe import AliveOsProbeTool
+    from tools.builtin.topology_trace import TopologyTraceTool
+    from tools.builtin.param_mining import ParamMiningTool
+    from tools.builtin.surface_check import SurfaceCheckTool
+    registry.register(NmapL3Tool(settings))         # L3 tier1：SYN/UDP/version/OS（低强度白名单）
     registry.register(DnsEnumTool(settings))        # L3：AXFR/泛解析/字典/置换
     registry.register(ServiceBannerTool(settings))  # L3 tier0：banner 服务识别
     registry.register(VhostScanTool(settings))      # L3：Host 轮换差分
     registry.register(OriginHuntTool(settings))     # L3：CDN 判定/源站候选（只记录）
-    registry.register(CloudEnumTool(settings))      # L3：云存储 bucket 分类
-    registry.register(DirEnumDeepTool(settings))    # L3：软404基线/403绕过/递归目录枚举
+    registry.register(CloudEnumTool(settings))      # L3：云存储 bucket 分类（OSS/S3/COS/Azure/GCS/OBS）
+    registry.register(DirEnumDeepTool(settings))    # L3：软404基线/403绕过/递归/sitemap 收割
     registry.register(ApiDocProbeTool(settings))    # L3：swagger/knife4j/druid 未授权面
+    registry.register(ReverseDnsTool(settings))     # L3：PTR 反查（DoH 公共解析器，零目标接触）
+    registry.register(AliveOsProbeTool(settings))   # L3：ICMP 存活 + TTL OS 启发式（仅授权主机）
+    registry.register(TopologyTraceTool(settings))  # L3：路由追踪（tracert/traceroute/tracepath）
+    registry.register(ParamMiningTool(settings))    # L3：arjun 式参数挖掘（反射+差分）
+    registry.register(SurfaceCheckTool(settings))   # L3：初步脆弱面（安全头/TLS/CORS，单请求级）
     from tools.builtin.api_recon import ApiReconTool
     from tools.adapters.custom import build_custom_tools
     from tools.adapters.mcp_tools import build_mcp_tools

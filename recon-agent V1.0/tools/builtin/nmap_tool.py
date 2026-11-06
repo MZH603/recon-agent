@@ -83,7 +83,7 @@ class NmapL3Params(BaseModel):
 
     target: str = Field(..., pattern=r"^[\w\.\-/:]+$", description="目标主机/域名/IP")
     ports: str = Field("80,443,8080,8443,3389,6379,9200", description="端口列表，最多20个")
-    scan_mode: Literal["syn", "udp", "version"] = "syn"
+    scan_mode: Literal["syn", "udp", "version", "os"] = "syn"
     tier1: int = Field(1, description="tier1 标记（registry 逐项确认读取，恒为 1）")
     max_rate: int = Field(10, ge=1, le=10, description="HARD: 上限 L3_SYNSCAN_MAX_RATE=10")
 
@@ -97,7 +97,7 @@ class NmapL3Params(BaseModel):
 
 
 class NmapL3Tool(BaseTool):
-    """nmap L3 tier1 低强度主动扫描（SYN/UDP/服务版本）。
+    """nmap L3 tier1 低强度主动扫描（SYN/UDP/服务版本/OS 探测）。
 
     HARD：仅 L3 且逐项确认；enforce_stealth_level 强制 --max-rate ≤ L3_SYNSCAN_MAX_RATE、
     --version-intensity ≤ 2；UDP 仅 L3_UDP_PORTS 白名单；无 nmap/Npcap → 显式失败（无降级）。
@@ -105,7 +105,7 @@ class NmapL3Tool(BaseTool):
 
     name = "nmap_scan_l3"
     description = ("L3 低强度主动扫描：SYN 半开（max-rate≤10）/UDP 白名单端口/服务版本"
-                   "（version-intensity≤2，tier1 逐项确认）")
+                   "（version-intensity≤2）/OS 探测（--osscan-limit，tier1 逐项确认）")
     risk_level = "高"
     min_level = 3
     params_model = NmapL3Params
@@ -118,11 +118,12 @@ class NmapL3Tool(BaseTool):
         nmap = find_tool("nmap")
         if not nmap:
             return ToolResult.err(
-                self.name, "nmap 不可用：tier1（SYN/UDP/version）无降级实现（需要 nmap + Npcap/管理员权限）")
+                self.name, "nmap 不可用：tier1（SYN/UDP/version/OS）无降级实现（需要 nmap + Npcap/管理员权限）")
         mode_args = {
             "syn": ["-sS"],
             "udp": ["-sU", "-p", self._settings.L3_UDP_PORTS],
             "version": ["-sV", "--version-intensity", "2", "-p", params.ports],
+            "os": ["-O", "--osscan-limit", "-p", params.ports],
         }[params.scan_mode]
         args, corrections = enforce_stealth_level(
             "nmap", [nmap, *mode_args, "-p", params.ports, params.target],
@@ -135,12 +136,19 @@ class NmapL3Tool(BaseTool):
         else:
             open_ports = re.findall(r"^(\d+)/tcp\s+open", out, re.M)
         services = re.findall(r"^(\d+)/\w+\s+open\s+(\S+)", out, re.M)
+        os_guess = ""
+        os_matches: list[str] = []
+        if params.scan_mode == "os":
+            m = re.search(r"Running(?: details)?: (.+)", out)
+            os_guess = m.group(1).strip()[:120] if m else "未判定"
+            os_matches = re.findall(r"OS details: (.+)", out)
         return ToolResult(
             name=self.name,
             success=True,
             stdout=out[:2000],
             data={"open_ports": [int(p) for p in open_ports], "scan_mode": params.scan_mode,
                   "services": [{"port": int(p), "service": s} for p, s in services[:20]],
+                  "os_guess": os_guess, "os_details": [o.strip()[:120] for o in os_matches[:3]],
                   "corrections": corrections},
             evidence=[f"nmap tier1 {params.scan_mode}: max-rate≤{self._settings.L3_SYNSCAN_MAX_RATE}",
                       *[f"[修正] {c}" for c in corrections]],

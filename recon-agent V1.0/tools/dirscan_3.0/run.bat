@@ -1,1 +1,0 @@
-java -jar "scandir-3.0.jar"

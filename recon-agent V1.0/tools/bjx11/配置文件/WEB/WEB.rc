@@ -1,6 +1,0 @@
-#define IDM_ 10002
-
-LANGUAGE 4,2
-
-129 ICON DISCARDABLE "res/icon.ico"
-

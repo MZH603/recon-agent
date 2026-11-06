@@ -90,11 +90,23 @@ def save_state(target: str, state: dict) -> None:
 def make_cascade_gate(target: str, level: int, auto_confirm: bool) -> ScanGate:
     """级联门控：level≥2/3 需三次解锁。auto_confirm 为显式参数（非 isatty 推断）。"""
     if auto_confirm and level >= 2:
-        step1 = "CONFIRM 3" if level >= 3 else "CONFIRM 2"
-        queue = [step1, "I UNDERSTAND AND AUTHORIZE"]
+        # --auto-confirm（仅限授权测试目标自动化验证）按提示内容应答三级门控与逐项确认。
+        # 不能用顺序队列：L3 级联里逐项确认（confirm_step）与三级解锁共用同一 prompt_fn，
+        # L2 解锁与 L3 解锁之间夹着 stage_l2 的多次逐项确认，顺序队列会把 L3 的解锁码
+        # 提前消费为逐项确认答案而被拒。改为按提示语义应答，与弹出顺序无关：
+        #   step1 意图 → 回对应级别的 CONFIRM 码；step3 责任声明 → 回固定声明；
+        #   逐项确认（"输入 yes 执行"）→ yes；其余兜底 yes。
+        # 目标精确串（step2）仍由下方 step2 包装器回填，语义不变。HARD：仅显式 auto-confirm 生效。
+        l2_code_3 = "I UNDERSTAND AND AUTHORIZE"
 
-        async def canned(_prompt: str) -> str:
-            return queue.pop(0) if queue else "yes"
+        async def canned(prompt: str) -> str:
+            if "CONFIRM 3" in prompt:
+                return "CONFIRM 3"
+            if "CONFIRM 2" in prompt:
+                return "CONFIRM 2"
+            if l2_code_3 in prompt:
+                return l2_code_3
+            return "yes"
 
         gate = ScanGate(target, batch_mode=False, is_tty=True,
                         prompt_fn=canned, requested_level=1)
@@ -258,13 +270,17 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
 
 async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuilder,
                    state: dict, gate: ScanGate) -> None:
-    """L3 自适应低扰动：dns_enum → service_banner → vhost → origin_hunt → cloud_enum
-    → dir_enum_deep（高价值子域 ≤5 台）→ api_doc_probe。
+    """L3 自适应低扰动（对齐信息搜集全矩阵）：
+    dns_enum → alive_os_probe（ICMP 存活+TTL OS）→ service_banner → vhost
+    → origin_hunt → reverse_dns（PTR 反查）→ cloud_enum（+子域派生桶名）
+    → topology_trace（≤TRACEROUTE_HOST_CAP 台）→ param_mining（高价值 ≤5 台）
+    → dir_enum_deep（高价值 ≤5 台）→ api_doc_probe → surface_check（初步脆弱面）。
 
-    HARD：每步前检查门控；tier1（nmap_scan_l3）不进入级联默认执行——留作 agent/操作者
-    逐项确认的显式动作；扰动熔断的主机记入报告「采样中止清单」，绝不硬闯。
+    HARD：每步前检查门控；tier1（nmap_scan_l3 SYN/UDP/version/OS）不进入级联默认
+    执行——留作 agent/操作者逐项确认的显式动作；扰动熔断的主机记入「采样中止清单」，
+    绝不硬闯；alive_os_probe 仅限授权范围内主机。
     """
-    section("Stage L3 · 自适应低扰动主动侦察")
+    section("Stage L3 · 自适应低扰动主动侦察（全矩阵）")
     l3_done = state.setdefault("l3_done", [])
 
     async def _run(tool_id: str, tool_name: str, arguments: dict, key: str) -> dict | None:
@@ -288,7 +304,17 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
     await _run("dns", "dns_enum",
                {"target": target, "try_axfr": True, "permute": True}, f"dns:{target}")
 
-    # 2) 主机 banner 识别（对 L1 端口面，≤20 端口/台，仅前 5 台）
+    # 2) 存活探测 + OS 启发式（ICMP ×1 + TTL 判定 + TCP 兜底；仅授权范围内主机）
+    probe_hosts = [h for h in dict.fromkeys([target] + alive)
+                   if ":" not in h][:50]  # IPv6 无 ICMP ping -4 参数面，收敛 IPv4
+    alive_data = await _run("alive", "alive_os_probe",
+                            {"target": target, "hosts": probe_hosts}, f"alive:{target}")
+    if alive_data and alive_data.get("os_guesses"):
+        builder.add_note(
+            "L3 OS 启发式: "
+            + ", ".join(f"{h}={o}" for h, o in list(alive_data["os_guesses"].items())[:8]))
+
+    # 3) 主机 banner 识别（对 L1 端口面，≤20 端口/台，仅前 5 台）
     port_map = state.get("port_map") or builder.data.port_map
     banner_hosts = [h for h, ports in port_map.items() if ports][:5]
     for host in banner_hosts:
@@ -298,14 +324,34 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
             await _run(f"banner-{host}", "service_banner",
                        {"target": host, "ports": ports}, f"banner:{host}")
 
-    # 3) vhost / 4) 源站线索 / 5) 云存储（主域各一轮）
+    # 4) vhost / 5) 源站线索（主域各一轮）
     await _run("vhost", "vhost_scan",
                {"target": target, "candidates": sorted(state.get("subdomains", []))[:20]},
                f"vhost:{target}")
-    await _run("origin", "origin_hunt", {"target": target}, f"origin:{target}")
-    await _run("cloud", "cloud_enum", {"target": target}, f"cloud:{target}")
+    origin_data = await _run("origin", "origin_hunt", {"target": target}, f"origin:{target}")
 
-    # 6) 深度目录枚举 + API 文档探测（L2 指纹卡片中的高价值主机 ≤5 台）
+    # 6) 反向 DNS：被动解析 IP + 源站候选 IP 的 PTR 反查（DoH，零目标接触）
+    ptr_ips: list[str] = [ip for ip in (builder.data.ips or []) if ip]
+    if origin_data:
+        ptr_ips += origin_data.get("current_ips") or []
+        ptr_ips += origin_data.get("candidate_origins_record_only") or []
+    ptr_ips = list(dict.fromkeys(ptr_ips))
+    if ptr_ips:
+        await _run("rdns", "reverse_dns",
+                   {"target": target, "ips": ptr_ips}, f"rdns:{target}")
+
+    # 7) 云存储（+已发现子域派生桶名候选）
+    await _run("cloud", "cloud_enum",
+               {"target": target, "subdomains": sorted(state.get("subdomains", []))[:20]},
+               f"cloud:{target}")
+
+    # 8) 拓扑追踪（端口面有开放端口的主机，≤TRACEROUTE_HOST_CAP 台）
+    trace_hosts = [h for h, ports in port_map.items() if ports][:8]
+    for host in trace_hosts:
+        await _run(f"trace-{host}", "topology_trace",
+                   {"target": host}, f"trace:{host}")
+
+    # 9) 深度目录枚举 + API 文档探测 + 参数挖掘 + 初步脆弱面（高价值主机 ≤5 台）
     interesting = set()
     for card in builder.data.tech_cards:
         h = str(card.get("host", ""))
@@ -331,10 +377,12 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
             builder.add_note(f"L3 dir_enum_deep {host} 失败: {result.error[:120]}")
         save_state(target, state)
         await _run(f"docs-{host}", "api_doc_probe", {"target": host}, f"docs:{host}")
+        await _run(f"params-{host}", "param_mining", {"target": host}, f"params:{host}")
+        await _run(f"surface-{host}", "surface_check", {"target": host}, f"surface:{host}")
 
     if gate.current_level() < 3:
         return
-    ok("L3 完成：扰动台账见各步骤 disturbance 字段；tier1（SYN/UDP/version）未自动执行")
+    ok("L3 完成：扰动台账见各步骤 disturbance 字段；tier1（SYN/UDP/version/OS）未自动执行")
 
 
 async def run(target: str, authorized: bool, level: int, auto_confirm: bool, note: str,
@@ -381,8 +429,9 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
             else:
                 ok(f"L2 已解锁，签名校验: {gate.verify_signature()}")
                 await stage_l2(target, alive, registry, builder, state, done_hosts, gate)
-        if level >= 3 and gate.current_level() >= 3:
-            plan = f"级联 L3（自适应低扰动）：DNS 枚举/banner/虚拟主机/源站线索/云存储/深度目录（{len(alive)} 台存活）"
+        if level >= 3:
+            plan = (f"级联 L3（自适应低扰动·全矩阵）：DNS 枚举/存活+OS/banner/虚拟主机/源站线索/"
+                    f"PTR 反查/云存储/拓扑追踪/参数挖掘/深度目录/初步脆弱面（{len(alive)} 台存活）")
             for step in (1, 2, 3):
                 granted, text = await gate.request_level_3_step(step, plan=plan)
                 if not granted:

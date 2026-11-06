@@ -10,7 +10,9 @@ import asyncio
 import hashlib
 import json
 import random
+import re
 import time
+from urllib.parse import urlparse
 from platforms.sync_worker import run_sync
 
 from pydantic import BaseModel, Field
@@ -49,6 +51,22 @@ def build_bypass_variants(path: str) -> list[dict[str, str]]:
         {"X-Forwarded-For": "127.0.0.1"},
         {"X-Original-URL": path},
     ][:2]
+
+
+def extract_sitemap_paths(body: str, cap: int = 30) -> list[str]:
+    """纯函数：sitemap.xml 内容 → URL path 候选（<loc> 提取，去重、限同站路径）。"""
+    locs = re.findall(r"<loc>\s*([^<\s]+)\s*</loc>", body, re.I)
+    out: list[str] = []
+    seen: set[str] = set()
+    for loc in locs[: cap * 3]:
+        path = urlparse(loc).path or "/"
+        if path == "/" or path in seen:
+            continue
+        seen.add(path)
+        out.append(path)
+        if len(out) >= cap:
+            break
+    return out
 
 
 class DirEnumDeepParams(BaseModel):
@@ -94,6 +112,15 @@ class DirEnumDeepTool(BaseTool):
         # 软 404 基线：随机不存在路径 ×2
         baseline = await self._baseline(scheme, netloc)
         bl_hash, bl_len = baseline
+
+        # sitemap.xml URL 收割（robots.txt 已在 L2 解析；此处补 sitemap 的 <loc> 路径）
+        sitemap_status, sitemap_body = await self._get(scheme, netloc, "/sitemap.xml")
+        if sitemap_status == 200 and sitemap_body:
+            sitemap_paths = extract_sitemap_paths(sitemap_body)
+            if sitemap_paths:
+                merged = list(dict.fromkeys(
+                    merged + sitemap_paths))[: params.max_paths]  # HARD: 总路径预算
+                notes.append(f"sitemap 收割 {len(sitemap_paths)} 路径并入候选")
 
         found: list[dict] = []
         bypass_hits: list[dict] = []

@@ -21,14 +21,23 @@ PLATFORMS: dict[str, str] = {
     "oss": "https://{bucket}.oss-cn-hangzhou.aliyuncs.com/",
     "s3": "https://{bucket}.s3.amazonaws.com/",
     "cos": "https://{bucket}.cos.ap-guangzhou.myqcloud.com/",
+    "azure": "https://{bucket}.blob.core.windows.net/",
+    "gcs": "https://{bucket}.storage.googleapis.com/",
+    "obs": "https://{bucket}.obs.cn-north-4.myhuaweicloud.com/",
 }
 
 
-def bucket_candidates(domain: str, cap: int) -> list[str]:
-    """纯函数：主域 → bucket 命名候选（≤cap，去重）。"""
+def bucket_candidates(domain: str, cap: int, subdomains: list[str] | None = None) -> list[str]:
+    """纯函数：主域（+已发现子域）→ bucket 命名候选（≤cap，去重）。"""
     name = domain.split(".")[0].lower().replace("-", "")
     tld = ".".join(domain.split(".")[-2:]).replace(".", "-")
-    templates = (
+    # 子域派生：api.example.com → api / api-static / api-assets（子域常直连桶）
+    sub_names = [s.split(".")[0].lower() for s in (subdomains or [])[:20]]
+    templates = tuple(dict.fromkeys(
+        [n for n in sub_names if n]
+        + [f"{n}-static" for n in sub_names if n]
+        + [f"{n}-assets" for n in sub_names if n]))
+    templates += (
         name, f"{name}-backup", f"{name}-backups", f"{name}-static", f"{name}-assets",
         f"{name}-img", f"{name}-images", f"{name}-log", f"{name}-logs", f"{name}-data",
         f"{name}-dev", f"{name}-test", f"{name}-prod", f"{name}-public", f"{name}-files",
@@ -46,18 +55,21 @@ def bucket_candidates(domain: str, cap: int) -> list[str]:
 
 
 def classify_bucket_response(status: int, body: str) -> dict:
-    """纯函数：单次 GET 响应 → 存在性/可读性判定。"""
+    """纯函数：单次 GET 响应 → 存在性/可读性判定（S3/OSS/COS/Azure/GCS/OBS 统一）。"""
     text = (body or "")[:4000]
-    if status == 200 and "ListBucketResult" in text:
+    if status == 200 and ("ListBucketResult" in text or "<Blobs>" in text
+                          or "ListBucketResult" in text or "ListAllMyBucketsResult" in text):
         return {"verdict": "public_list", "severity": "High",
-                "note": "桶可匿名列举（ListBucketResult）— 高危发现，人工核实"}
+                "note": "桶可匿名列举（ListBucketResult/Blobs）— 高危发现，人工核实"}
     if status == 200:
         return {"verdict": "public_read", "severity": "Medium",
                 "note": "桶可匿名读取（未见列举接口）"}
     if status == 403:
         return {"verdict": "exists_denied", "severity": "Low",
                 "note": "桶存在但拒绝匿名访问（配置正确）"}
-    if status in (404, 400) or "NoSuchBucket" in text:
+    if status in (404, 400) or any(m in text for m in
+                                   ("NoSuchBucket", "BlobNotFound", "ContainerNotFound",
+                                    "NoSuchKey")):
         return {"verdict": "absent", "severity": "Info", "note": "桶不存在"}
     return {"verdict": "unknown", "severity": "Info", "note": f"HTTP {status}"}
 
@@ -66,8 +78,11 @@ class CloudEnumParams(BaseModel):
     """云存储枚举参数。"""
 
     target: str = Field(..., pattern=r"^[\w\.\-]+$", description="授权主域名")
-    platforms: list[str] = Field(default_factory=lambda: ["oss", "s3", "cos"],
-                                 description="平台列表（子集）")
+    platforms: list[str] = Field(
+        default_factory=lambda: ["oss", "s3", "cos", "azure", "gcs", "obs"],
+        description="平台列表（子集）")
+    subdomains: list[str] = Field(default_factory=list, max_length=100,
+                                  description="已发现子域（派生桶名候选）")
 
 
 class CloudEnumTool(BaseTool):
@@ -86,8 +101,9 @@ class CloudEnumTool(BaseTool):
         assert isinstance(params, CloudEnumParams)
         domain = params.target.lower().rstrip(".")
         platforms = [p for p in params.platforms if p in PLATFORMS]
-        buckets = bucket_candidates(domain, self._settings.CLOUD_BUCKET_CAP)  # HARD cap
-        notes: list[str] = ["OSS/COS 按默认区域探测，命中后建议人工核实其余区域"]
+        buckets = bucket_candidates(domain, self._settings.CLOUD_BUCKET_CAP,
+                                    params.subdomains)  # HARD cap
+        notes: list[str] = ["OSS/COS/OBS/Azure 按默认区域探测，命中后建议人工核实其余区域"]
 
         sem = asyncio.Semaphore(3)
 
