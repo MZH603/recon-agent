@@ -14,12 +14,15 @@ import argparse
 import asyncio
 import hashlib
 import json
+import os
 import sys
 import time
+from os import getenv
 from pathlib import Path
 
 from gate.scan_gate import ScanGate
 from model.base import NormalizedToolCall
+from platforms.tools import find_tool
 from observability.metrics import TaskMetrics
 from output.report_builder import ReportBuilder
 from tools.registry import build_default
@@ -43,6 +46,29 @@ print("sandbox-ok", math.gcd(1071, 462), platform.python_version())
 
 def _safe_target(target: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in target)
+
+
+class _CountingRegistry:
+    """真实工具调用口径（评审 P2-13）：调用数/成功数直接统计，替代指纹卡近似。
+
+    此前 metrics.tool_calls = 指纹卡数 + 风险路径数 + 1，与可见失败项对不上；
+    现改为对 registry.execute 的逐次计数（含失败），口径与附录失败记录一致。
+    """
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls = 0
+        self.successes = 0
+
+    async def execute(self, call):
+        self.calls += 1
+        result = await self._inner.execute(call)
+        if result.success:
+            self.successes += 1
+        return result
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 def _state_path(target: str) -> Path:
@@ -150,6 +176,12 @@ async def stage_l0(  # noqa: N802 —— 保留历史名（内容=L1 基础侦�
         return None
     alive = [a["host"] for a in sub.data["alive"] if a["host"] != target] + [target]
     builder.add_subdomains(sub.data["subdomains"], [a["host"] for a in sub.data["alive"]])
+    # 子域来源交叉验证口径（评审 P1-6）：subdomain_enum 多源命中计数如实入报告
+    if sub.data.get("sources"):
+        builder.add_note("子域来源分布: " + json.dumps(
+            sub.data["sources"], ensure_ascii=False, sort_keys=True))
+        builder.add_note("子域来源状态: " + json.dumps(
+            sub.data.get("source_status", {}), ensure_ascii=False, sort_keys=True))
 
     from collectors.asset_expander import expand_assets
     from collectors.enrich import enrich_recon
@@ -159,13 +191,16 @@ async def stage_l0(  # noqa: N802 —— 保留历史名（内容=L1 基础侦�
     builder.data.ips = assets["ips"]
     builder.data.c_sectors = assets["c_sectors"]
     builder.data.whois = assets["whois"]
+    # 评审 P0-4（矛盾①）：范围外候选必须进入结构化字段（此前只落 notes，
+    # 第 5 节渲染 out_of_scope 时恒为「无」与备注自相矛盾）
+    builder.data.out_of_scope = assets.get("out_of_scope") or []
     for note in assets["notes"]:
         builder.add_note(note)
     await enrich_recon(builder.data, settings)
     from collectors.intel_expander import expand_intel
 
     await expand_intel(builder.data, settings)  # 测绘引擎/组织情报/代码泄漏/dorking（L0）
-    ok(f"L1 被动段完成：子域 {len(builder.data.subdomains)} · 存活 {len(alive)}")
+    ok(f"L1 被动段完成：子域 {len(builder.data.subdomains)} · 可解析 {len(alive)}")
     return alive
 
 
@@ -290,7 +325,8 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
     section("Stage L3 · 自适应低扰动主动侦察（全矩阵）")
     l3_done = state.setdefault("l3_done", [])
 
-    async def _run(tool_id: str, tool_name: str, arguments: dict, key: str) -> dict | None:
+    async def _run(tool_id: str, tool_name: str, arguments: dict, key: str,
+                   host: str = "") -> dict | None:
         if key in l3_done:
             info(f"[L3] {tool_name} {key} 已完成（续跑跳过）")
             return None
@@ -300,8 +336,11 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
             id=f"fs-l3-{tool_id}", name=tool_name, arguments=arguments))
         l3_done.append(key)
         if result.success:
-            builder.add_note(f"L3 {tool_name}: "
-                             f"{json.dumps(result.data, ensure_ascii=False, default=str)[:400]}")
+            # 评审 P0-1/P0-2：结构化结果全量入报告（不再截断 JSON 进 notes）
+            builder.data.l3_results.append(
+                {"tool": tool_name, "host": host or str(arguments.get("target", target)),
+                 "data": result.data})
+            builder.add_note(f"L3 {tool_name} {key} 完成（结构化结果见 4c 节）")
             save_state(target, state)
             return result.data
         builder.add_note(f"L3 {tool_name} 失败: {result.error[:160]}")
@@ -309,13 +348,15 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
 
     # 1) DNS 枚举（AXFR/泛解析/字典/置换）
     await _run("dns", "dns_enum",
-               {"target": target, "try_axfr": True, "permute": True}, f"dns:{target}")
+               {"target": target, "try_axfr": True, "permute": True}, f"dns:{target}",
+               host=target)
 
     # 2) 存活探测 + OS 启发式（ICMP ×1 + TTL 判定 + TCP 兜底；仅授权范围内主机）
     probe_hosts = [h for h in dict.fromkeys([target] + alive)
                    if ":" not in h][:50]  # IPv6 无 ICMP ping -4 参数面，收敛 IPv4
     alive_data = await _run("alive", "alive_os_probe",
-                            {"target": target, "hosts": probe_hosts}, f"alive:{target}")
+                            {"target": target, "hosts": probe_hosts}, f"alive:{target}",
+                            host=target)
     if alive_data and alive_data.get("os_guesses"):
         builder.add_note(
             "L3 OS 启发式: "
@@ -329,13 +370,14 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
                                                     3389, 5432, 5900, 6379, 8080, 9200)][:20]
         if ports:
             await _run(f"banner-{host}", "service_banner",
-                       {"target": host, "ports": ports}, f"banner:{host}")
+                       {"target": host, "ports": ports}, f"banner:{host}", host=host)
 
     # 4) vhost / 5) 源站线索（主域各一轮）
     await _run("vhost", "vhost_scan",
                {"target": target, "candidates": sorted(state.get("subdomains", []))[:20]},
-               f"vhost:{target}")
-    origin_data = await _run("origin", "origin_hunt", {"target": target}, f"origin:{target}")
+               f"vhost:{target}", host=target)
+    origin_data = await _run("origin", "origin_hunt", {"target": target}, f"origin:{target}",
+                             host=target)
 
     # 6) 反向 DNS：被动解析 IP + 源站候选 IP 的 PTR 反查（DoH，零目标接触）
     ptr_ips: list[str] = [ip for ip in (builder.data.ips or []) if ip]
@@ -345,21 +387,22 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
     ptr_ips = list(dict.fromkeys(ptr_ips))
     if ptr_ips:
         await _run("rdns", "reverse_dns",
-                   {"target": target, "ips": ptr_ips}, f"rdns:{target}")
+                   {"target": target, "ips": ptr_ips}, f"rdns:{target}", host=target)
 
     # 7) 云存储（+已发现子域派生桶名候选）
     await _run("cloud", "cloud_enum",
                {"target": target, "subdomains": sorted(state.get("subdomains", []))[:20]},
-               f"cloud:{target}")
+               f"cloud:{target}", host=target)
 
     # 8) 拓扑追踪（端口面有开放端口的主机，≤TRACEROUTE_HOST_CAP 台）
     trace_hosts = [h for h, ports in port_map.items() if ports][:8]
     for host in trace_hosts:
         await _run(f"trace-{host}", "topology_trace",
-                   {"target": host}, f"trace:{host}")
+                   {"target": host}, f"trace:{host}", host=host)
 
-    # 9) 深度目录枚举 + API 文档探测 + 参数挖掘 + 初步脆弱面（高价值主机 ≤5 台）
-    # 筛选键与 deep_fingerprint 实际产出对齐（server/frontend/system/middleware/framework）
+    # 9) 深度目录枚举 + API 文档探测 + 参数挖掘 + 初步脆弱面（≤5 台）
+    # 评审 P1-8：筛选 = 指纹特征键 ∪ 端口可达主机；环境类资产（staging/e2e/
+    # pre/uat/integration）排序优先——往往是最有价值目标。
     interesting = set()
     for card in builder.data.tech_cards:
         h = str(card.get("host", ""))
@@ -368,26 +411,40 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
             tech.get("server") or tech.get("frontend") or tech.get("system")
             or tech.get("middleware") or tech.get("framework")):
             interesting.add(h)
-    for host in sorted(interesting)[:5]:
+    interesting |= {h for h, ports in port_map.items() if ports}
+    env_first = sorted(interesting, key=lambda h: (
+        0 if any(k in h.lower() for k in ("staging", "e2e", "pre-", "uat", "integration"))
+        else 1, h))
+    for host in env_first[:5]:
         if gate.current_level() < 3:
             return
-        result = await registry.execute(NormalizedToolCall(
-            id=f"fs-l3-dir-{host}", name="dir_enum_deep",
-            arguments={"target": host, "max_paths": 120}))
-        l3_done.append(f"dirdeep:{host}")
-        if result.success:
-            state.setdefault("dir_deep_results", []).append(
-                {"target": host, "success": True, "data": result.data})
-            builder.add_note(
-                f"L3 dir_enum_deep {host}: 检查 {result.data.get('checked', 0)} 路径，"
-                f"发现 {len(result.data.get('found', []))}（High {result.data.get('high_count', 0)}）"
-                + ("，[扰动熔断中止]" if result.data.get("suspended") else ""))
+        if f"dirdeep:{host}" in l3_done:
+            info(f"[L3] dir_enum_deep {host} 已完成（续跑跳过）")
         else:
-            builder.add_note(f"L3 dir_enum_deep {host} 失败: {result.error[:120]}")
-        save_state(target, state)
-        await _run(f"docs-{host}", "api_doc_probe", {"target": host}, f"docs:{host}")
-        await _run(f"params-{host}", "param_mining", {"target": host}, f"params:{host}")
-        await _run(f"surface-{host}", "surface_check", {"target": host}, f"surface:{host}")
+            result = await registry.execute(NormalizedToolCall(
+                id=f"fs-l3-dir-{host}", name="dir_enum_deep",
+                arguments={"target": host, "max_paths": 120}))
+            l3_done.append(f"dirdeep:{host}")
+            if result.success:
+                # 跨轮去重（state 重跑不重复入表）
+                state["dir_deep_results"] = [
+                    d for d in state.get("dir_deep_results", [])
+                    if d.get("target") != host]
+                state["dir_deep_results"].append(
+                    {"target": host, "success": True, "data": result.data})
+                builder.data.l3_results[:] = [
+                    r for r in builder.data.l3_results
+                    if not (r.get("tool") == "dir_enum_deep" and r.get("host") == host)]
+                builder.data.l3_results.append(
+                    {"tool": "dir_enum_deep", "host": host, "data": result.data})
+                # 全量命中进风险路径表（评审 P0-1：不再只落计数）
+                builder.add_dir_enum(host, result)
+            else:
+                builder.add_note(f"L3 dir_enum_deep {host} 失败: {result.error[:120]}")
+            save_state(target, state)
+        await _run(f"docs-{host}", "api_doc_probe", {"target": host}, f"docs:{host}", host=host)
+        await _run(f"params-{host}", "param_mining", {"target": host}, f"params:{host}", host=host)
+        await _run(f"surface-{host}", "surface_check", {"target": host}, f"surface:{host}", host=host)
 
     if gate.current_level() < 3:
         return
@@ -401,13 +458,17 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
         err("必须 --authorized（HARD）")
         return 2
     gate = make_cascade_gate(target, level, auto_confirm)
-    registry = build_default(settings, gate, target)
+    registry = _CountingRegistry(build_default(settings, gate, target))
+    scan_started = time.strftime("%Y-%m-%d %H:%M:%S")
     try:
         if note:
             audit("cascade_authorization", {"target": target, "level": level, "note": note})
             info(f"授权背景已记录: {note}")
         builder = ReportBuilder(target, scan_level=0,
                                 strategy_note=f"级联扫描 L1→L{level}（L0 已并入 L1；高级别自动包含全部低等级）")
+        # 评审 P2-9：授权声明与采集窗口入报告（与审计 cascade_authorization 同源）
+        builder.data.authorization_note = note or "（未提供 --note；授权声明见审计日志）"
+        builder.data.port_scan_scope = f"MAIN_PORTS {len(MAIN_PORTS.split(','))} 端口（{MAIN_PORTS}），限速 TCP Connect"
         state = load_state(target)
         done_hosts = set(state["done"])
         builder.data.port_map.update(state["port_map"])
@@ -453,14 +514,21 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
 
         builder.data.scan_level = gate.current_level()
         metrics = TaskMetrics()
-        metrics.tool_calls = len(builder.data.tech_cards) + len(builder.data.risk_paths) + 1
-        metrics.tool_success = len([c for c in builder.data.tech_cards if not c.get("error")])
+        metrics.tool_calls = registry.calls
+        metrics.tool_success = registry.successes
         metrics.scan_level_reached = gate.current_level()
         metrics.stealth_violations = violations
+        builder.data.scan_window = f"{scan_started} — {time.strftime('%Y-%m-%d %H:%M:%S')}"
         builder.data.next_steps = _build_next_steps(builder.data, gate.current_level())
+        from platforms.paths import get_output_dir
         builder.data.raw_refs = [
-            "审计日志: %APPDATA%\\recon-agent\\audit.log（哈希链）",
-            f"状态文件: {_state_path(target)}",
+            f"审计日志: {Path(getenv('APPDATA', '~/')) / 'recon-agent' / 'audit.log'}（哈希链，"
+            f"{len(builder.data.notes)} 条采集备注可交叉核对）",
+            f"状态文件: {_state_path(target).resolve()}",
+            f"报告目录: {get_output_dir().resolve()}（同名 .json 为全量结构化数据，"
+            f".csv 为资产清单）",
+            f"工具版本: recon-agent V1.0 · Python {sys.version.split()[0]} · "
+            f"端口扫描 {'nmap' if find_tool('nmap') else 'builtin_socket 降级'}",
         ]
         paths = builder.save(metrics)
         section("级联扫描完成")
@@ -471,16 +539,74 @@ async def run(target: str, authorized: bool, level: int, auto_confirm: bool, not
 
 
 def _build_next_steps(data, level: int) -> list[dict]:
-    steps = []
-    if data.ips and level == 0:
+    """下一步建议生成器（评审 P2-20）：由实际发现驱动，非模板句。
+
+    优先级 = 实际发现（参数反射/目录命中/非常规端口）> 环境类资产复核 > 层级补全。
+    """
+    steps: list[dict] = []
+
+    # 1) 参数反射发现（param_mining 403 回显等——最值得人工跟进的线索）
+    param_hits: list[tuple[str, list[str]]] = []
+    for item in data.l3_results:
+        if item.get("tool") != "param_mining":
+            continue
+        reflected = [f.get("param") for f in (item.get("data") or {}).get("findings", [])
+                     if f.get("reflected")]
+        if reflected:
+            param_hits.append((str(item.get("host")), reflected[:5]))
+    for host, params in param_hits[:2]:
+        steps.append({
+            "command": f"人工核实 {host} 的参数反射: {', '.join(params)}（403 页回显 marker）",
+            "purpose": "确认参数进入处理逻辑的语义，排除 WAF 页面回显假阳性后评估注入面",
+            "risk": "中", "needs_gate": True})
+
+    # 2) 目录枚举命中（dir_enum_deep found 项）
+    dir_hosts = []
+    for item in data.l3_results:
+        if item.get("tool") == "dir_enum_deep" and (item.get("data") or {}).get("found"):
+            dir_hosts.append(str(item.get("host")))
+    if dir_hosts:
+        steps.append({
+            "command": f"复核 {', '.join(dir_hosts[:3])} 的目录枚举命中清单（见 4c 节）",
+            "purpose": "对命中路径逐条定性（敏感文件/管理面/备份），High 项走授权验证流程",
+            "risk": "中", "needs_gate": True})
+
+    # 3) 非常规端口面（objects 8080/8443 类）
+    nonstandard = {h: [p for p in ports if p not in (80, 443)]
+                   for h, ports in data.port_map.items()
+                   if ports and any(p not in (80, 443) for p in ports)}
+    for host, ports in list(nonstandard.items())[:2]:
+        steps.append({
+            "command": f"确认 {host} 的 {', '.join(str(p) for p in ports)} 端口服务类型"
+                       f"（tier1 nmap_scan_l3 -sV --version-intensity 2）",
+            "purpose": "识别非标准端口上的服务与版本，补 CVE 映射所需的版本指纹",
+            "risk": "高", "needs_gate": True})
+
+    # 4) 环境类资产不可达复核（staging/e2e/pre-production 往往最有价值）
+    env_hosts = [s for s in data.subdomains
+                 if any(k in s.lower() for k in ("staging", "e2e", "pre-", "uat", "integration"))]
+    unresolved_env = [h for h in env_hosts if h not in data.port_map
+                      and str(h) not in {str(c.get("host")) for c in data.tech_cards}]
+    if unresolved_env:
+        steps.append({
+            "command": f"更换网络位置复核环境类资产: {', '.join(unresolved_env[:5])}",
+            "purpose": "staging/e2e 环境不可达可能源于源 IP 地理/ACL 限制（非资产不存在），"
+                       "换出口后复测 DNS 与 HTTP 层",
+            "risk": "低"})
+
+    # 5) 版本指纹补全（缺版本 → CVE 无法映射的显式闭环）
+    unversioned = [str(c.get("host")) for c in data.tech_cards
+                   if not c.get("error") and (c.get("tech") or {}).get("server")
+                   and not (c.get("tech") or {}).get("server", {}).get("version")]
+    if unversioned:
+        steps.append({
+            "command": f"对 {', '.join(unversioned[:3])} 做版本指纹补全（Banner/banner 差分/tier1 -sV）",
+            "purpose": "当前 Server 头未带版本号，CVE 映射无法进行（0 关联 ≠ 0 风险）",
+            "risk": "中", "needs_gate": True})
+
+    if not steps and data.ips:
         steps.append({"command": f"recon-agent -t {data.target} --authorized --profile stealth",
                       "purpose": "L1 隐蔽主动：对主目标限速端口扫描", "risk": "中"})
-    if level >= 1:
-        non_web = [h for h, ports in data.port_map.items()
-                   if any(p not in (80, 443) for p in ports)]
-        if non_web:
-            steps.append({"command": f"对 {', '.join(non_web[:3])} 做服务版本确认",
-                          "purpose": "确认非 web 端口上的服务类型", "risk": "中"})
     return steps
 
 

@@ -37,12 +37,14 @@ def test_alive_and_port_map_populate_table():
     data = make_data()
     data.alive_hosts = ["example.com", "admin.example.com", "api.example.com"]
     data.port_map = {"example.com": [443], "admin.example.com": []}
+    data.subdomains = ["example.com", "admin.example.com", "api.example.com"]
     md = render_markdown(data, TaskMetrics(), [])
-    assert "✅ 存活" in md                                   # 子域名清单状态列
+    assert "✅ 端口确认" in md                               # 子域名清单状态列（三态语义）
     assert "| example.com | Example | 443 |" in md           # 端口回填 + 标题列
     # 三种端口状态严格区分：真实扫描 / 扫过无开放 / 从未扫过
-    assert "无开放端口（L1 扫描完成）" in md                  # admin：扫过但无开放端口
-    assert "未探测（需 L1 受控扫描）" in md                   # api：从未扫过 → 待办标记
+    assert "无开放端口" in md                                # admin：扫过但无开放端口
+    assert "未探测" in md                                    # api：从未扫过 → 待办标记
+    assert "可解析 ≠ 服务存活" in md                         # 状态口径脚注（评审 P0-3）
 
 
 def test_unscanned_and_dead_status_marks():
@@ -50,10 +52,27 @@ def test_unscanned_and_dead_status_marks():
     data = make_data()
     data.alive_hosts = ["example.com", "api.example.com"]    # admin 未存活
     data.port_map = {"example.com": [80, 443]}
+    data.subdomains = ["example.com", "admin.example.com", "api.example.com"]
     md = render_markdown(data, TaskMetrics(), [])
-    assert "❌ 未解析/未存活" in md                          # admin：子域清单状态
-    assert md.count("未探测（需 L1 受控扫描）") == 1         # api：存活但未扫
-    assert "无开放端口（L1 扫描完成）" not in md
+    assert "✅ 端口确认" in md                               # example.com
+    assert "❌ 未解析" in md                                 # admin：不在 alive_hosts
+    assert md.count("未探测") == 1                           # api：存活但未扫
+    assert "· 可解析" in md                                  # api：三态中的可解析态
+
+
+def test_alive_three_state_semantics():
+    """评审 P0-3：三态存活——端口确认 > HTTP 可达 > 可解析，逐级递减证据强度。"""
+    data = make_data()
+    data.alive_hosts = ["example.com", "admin.example.com", "api.example.com"]
+    data.http_reachable = ["admin.example.com"]
+    data.port_map = {"example.com": [443]}
+    data.tech_cards = [{"host": "admin.example.com", "tech": {}, "status": 200, "title": "t"}]
+    data.subdomains = ["example.com", "admin.example.com", "api.example.com"]
+    md = render_markdown(data, TaskMetrics(), [])
+    assert "✅ 端口确认" in md            # example.com
+    assert "🌐 HTTP 可达" in md           # admin.example.com
+    assert "· 可解析" in md               # api.example.com
+    assert "❌ 未解析" not in md          # 本例三台均有证据，无死域行
 
 
 def test_degraded_watermark_present():

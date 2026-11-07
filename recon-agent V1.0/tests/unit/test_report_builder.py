@@ -29,7 +29,7 @@ def test_builder_produces_standard_sections():
     assert "| example.com | 示例大学 | 80, 443 |" in md
     assert "| admin.example.com | /robots.txt | 200 | — | 可访问 |" in md  # 无严重度数据 → —
     assert "[降级模式]" in md and "提前终止" in md
-    assert "✅ 存活" in md and "❌ 未解析/未存活" in md
+    assert ("✅ 端口确认" in md or "🌐 HTTP 可达" in md) and "❌ 未解析" in md  # 三态语义
 
 
 def test_builder_zero_exposure_recorded_as_positive():

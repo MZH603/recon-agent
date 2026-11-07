@@ -65,7 +65,7 @@ async def _collect_dns(domain: str, settings: Settings) -> dict:
         result = await tool.run(DNSParams(target=domain, rtype=rtype))
         return rtype, result
 
-    results = await asyncio.gather(*[_query(rt) for rt in ("MX", "NS", "TXT", "SOA")])
+    results = await asyncio.gather(*[_query(rt) for rt in ("MX", "NS", "TXT", "SOA", "AAAA")])
     records: dict = {}
     if warmup_result.success:
         records["A"] = [r.get("data") for r in warmup_result.data.get("records", [])]
@@ -79,6 +79,14 @@ async def _collect_dns(domain: str, settings: Settings) -> dict:
         else:
             records[rtype] = []
             records.setdefault("_errors", []).append(f"{rtype}: {result.error[:120]}")
+
+    # 评审 P1-10：DMARC 独立查询（_dmarc.<domain> TXT）；SPF 由渲染端从 TXT 解析
+    dmarc = await DNSQueryTool(settings).run(
+        DNSParams(target=f"_dmarc.{domain}", rtype="TXT"))
+    if dmarc.success:
+        records["DMARC"] = [r.get("data") for r in dmarc.data.get("records", []) if r.get("data")]
+    else:
+        records["DMARC"] = []
     return records
 
 

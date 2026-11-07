@@ -14,6 +14,7 @@ import asyncio
 from platforms.sync_worker import run_sync
 import hashlib
 import json
+import random
 import socket
 import ssl
 
@@ -79,12 +80,20 @@ class SubdomainEnumTool(BaseTool):
         )
 
     async def run(self, params: BaseModel) -> ToolResult:
-        """多源枚举 → 递归一层 → 范围过滤 → 存活解析。"""
+        """多源枚举 → 泛解析基线 → 递归一层 → 范围过滤 → 存活解析。"""
         assert isinstance(params, SubdomainParams)
         domain = normalize_host(params.target)
         sources: dict[str, int] = {}
+        source_status: dict[str, str] = {}
         hosts: set[str] = {domain}
         notes: list[str] = []
+
+        # 泛解析基线（评审 P1-6：子域枚举最经典假阳性陷阱，L1 层即检测）
+        wildcard_ips = await self._wildcard_baseline(domain)
+        wildcard = bool(wildcard_ips)
+        if wildcard:
+            notes.append(f"泛解析开启（基线 IP: {', '.join(sorted(wildcard_ips))[:80]}）"
+                         "——字典/被动源命中该 IP 的记录按假阳性过滤")
 
         # 并发采集被动 DNS 源（HARD: 仅访问第三方 API，不影响目标）
         passive_names = ("otx", "rapiddns", "hackertarget", "urlscan")
@@ -96,6 +105,8 @@ class SubdomainEnumTool(BaseTool):
         for name, (found, error) in zip(passive_names, passive_results):
             hosts.update(found)
             sources[name] = len(found)
+            source_status[name] = f"error: {error[:60]}" if error else (
+                f"{len(found)} 命中" if found else "0 命中（源可达但无数据）")
             if error:
                 notes.append(f"{name} 不可达（不重试）: {error[:80]}")
 
@@ -103,6 +114,8 @@ class SubdomainEnumTool(BaseTool):
         ct_found, ct_error = await self._ct_root(domain)
         hosts.update(ct_found)
         sources["ct_root"] = len(ct_found)
+        source_status["ct_root"] = f"error: {ct_error[:60]}" if ct_error else (
+            f"{len(ct_found)} 命中" if ct_found else "0 命中（源可达但无数据）")
 
         recursion_found = 0
         if params.recursive:
@@ -115,17 +128,24 @@ class SubdomainEnumTool(BaseTool):
 
         if params.brute:
             hits = await dns_brute(domain, params.prefix_limit)
+            if wildcard:  # 泛解析 IP 过滤（与 L3 dns_enum 同一判定逻辑）
+                hits = {h for h in hits
+                        if not (await self._resolve_host(h) & wildcard_ips)}
             hosts.update(hits)
             sources["dns_brute"] = len(hits)
+            source_status["dns_brute"] = f"{len(hits)} 命中（泛解析过滤{'后' if wildcard else '未触发'}）"
 
         san = await self._cert_san(domain)
         hosts.update(san)
         sources["tls_san"] = len(san)
+        source_status["tls_san"] = f"{len(san)} 条"
 
         in_scope = filter_scope(hosts, domain)[: params.max_hosts]
         alive = await self._resolve_alive(in_scope)
         payload = {
             "domain": domain, "subdomains": in_scope, "sources": sources,
+            "source_status": source_status, "wildcard": wildcard,
+            "wildcard_ips": sorted(wildcard_ips),
             "san": san, "alive": alive, "recursive": params.recursive,
             "wordlist_size": len(load_wordlist()), "notes": notes,
         }
@@ -182,3 +202,38 @@ class SubdomainEnumTool(BaseTool):
                 except (OSError, asyncio.TimeoutError):
                     continue
         return alive
+
+    async def _wildcard_baseline(self, domain: str) -> set[str]:
+        """泛解析基线（评审 P1-6）：两个随机子域均解析成功 → 判定泛解析。
+
+        与 L3 dns_enum 同一判定逻辑；命中 IP 集用于过滤字典/被动源假阳性。
+        """
+        rnd = "".join(random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(12))
+        probes = [f"{rnd}.{domain}", f"{rnd[::-1]}.{domain}"]
+        results = []
+        for probe in probes:
+            async with self._limiter.slot():
+                try:
+                    infos = await asyncio.wait_for(
+                        run_sync(socket.getaddrinfo, probe, None), timeout=5
+                    )
+                    results.append({i[4][0] for i in infos})
+                except (OSError, asyncio.TimeoutError):
+                    results.append(set())
+        if results and all(results):
+            merged: set[str] = set()
+            for group in results:
+                merged.update(group)
+            return merged
+        return set()
+
+    async def _resolve_host(self, host: str) -> set[str]:
+        """单主机解析 IP 集合（泛解析过滤用；失败收敛空集）。"""
+        async with self._limiter.slot():
+            try:
+                infos = await asyncio.wait_for(
+                    run_sync(socket.getaddrinfo, host, None), timeout=5
+                )
+                return {i[4][0] for i in infos}
+            except (OSError, asyncio.TimeoutError):
+                return set()

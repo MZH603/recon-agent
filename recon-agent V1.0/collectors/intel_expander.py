@@ -101,7 +101,8 @@ async def expand_intel(data: ReconData, settings: Settings) -> None:
             high = result.data.get("high_count", 0)
             data.notes.append(
                 f"dorking: {result.data.get('queries_run', 0)}/{result.data.get('budget', 0)} 查询"
-                f"，High 命中 {high}")
+                f"，High 命中 {high}"
+                + (f"；{result.data.get('quality_note')}" if result.data.get("quality_note") else ""))
         else:
             data.notes.append(f"dorking 失败: {result.error[:120]}")
     except (OSError, ValueError, RuntimeError) as exc:

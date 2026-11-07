@@ -29,6 +29,19 @@ NOISE_EMAIL_DOMAINS = (
     "example.com", "example.org", "sentry.io", "sentry-next.wixpress.com",
     "wixpress.com", "w3.org", "schema.org", "sentry.wixpress.com",
 )
+# 评审 P1-15：域名注册局/注册商联系人（WHOIS 模板邮箱）非目标组织情报——
+# 单独标注来源，不与组织邮箱混排（ceo@cnnic.cn ≠ PayPal 员工）
+REGISTRY_CONTACT_DOMAINS = (
+    "cnnic.cn", "nic.cn", "verisign.com", "iana.org", "apnic.net",
+    "arin.net", "ripe.net", "lacnic.net", "afrinic.net",
+)
+
+
+def _registry_contact(email: str) -> bool:
+    """纯函数：邮箱域是否为注册局/注册商联系域（WHOIS 模板邮箱，非目标组织）。"""
+    domain_part = email.lower().split("@")[-1]
+    return any(domain_part == d or domain_part.endswith("." + d)
+               for d in REGISTRY_CONTACT_DOMAINS)
 ROLE_ACCOUNTS = ("admin", "security", "info", "contact", "hr", "support", "it")
 ASN_RE = re.compile(r"AS(\d+)\s*[·|]\s*([^\r\n<]{2,80})")
 
@@ -121,7 +134,8 @@ class OrgIntelTool(BaseTool):
             from collectors.asset_expander import IANA_WHOIS, _whois_query
             text = await run_sync(_whois_query, domain, IANA_WHOIS, self._settings.CONNECT_TIMEOUT)
             for email in self._extract_emails(text, domain):
-                emails.setdefault(email, {"email": email, "source": "whois"})
+                emails.setdefault(email, {"email": email, "source": (
+                    "whois（注册局联系人，非目标组织）" if _registry_contact(email) else "whois")})
             for line in text.splitlines():
                 if line.lower().startswith("registrant organization:"):
                     whois_org = line.split(":", 1)[1].strip()

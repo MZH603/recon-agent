@@ -54,10 +54,16 @@ HEADER_SIGNATURES: tuple[tuple[str, str, str, str, float], ...] = (
 )
 
 # (header, 版本捕获正则)：命中后为同名已知项补充 version 字段
+# 评审 P1-11：缺版本指纹则 CVE 映射无法进行——补齐国内常见栈的版本捕获
 VERSION_HEADER_SIGNATURES: tuple[tuple[str, str, str, str], ...] = (
     ("Server", r"nginx/([\d\.]+)", "server", "Nginx"),
     ("Server", r"apache/([\d\.]+)", "server", "Apache"),
+    ("Server", r"tengine/([\d\.]+)", "server", "OpenResty/Tengine"),
+    ("Server", r"openresty/([\d\.]+)", "server", "OpenResty"),
+    ("Server", r"microsoft-iis/([\d\.]+)", "server", "IIS"),
     ("X-Powered-By", r"php/([\d\.]+)", "language", "PHP"),
+    ("X-Powered-By", r"express\b", "framework", "Express"),
+    ("X-Generator", r"next\.js", "frontend", "Next.js"),
 )
 
 # 页面特征 -> (类别, 名称, 置信度)

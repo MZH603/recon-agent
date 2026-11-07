@@ -22,9 +22,13 @@ class ReconData:
     target: str
     scan_level: int = 0
     strategy_note: str = "L1 基础侦察（被动采集 + 隐蔽端口）"
+    authorization_note: str = ""                           # 授权依据（--note，审计同源）
+    scan_window: str = ""                                  # 采集窗口（开始—结束时间）
+    port_scan_scope: str = ""                              # 端口扫描范围声明（已扫端口清单）
     dns: dict = field(default_factory=dict)
     subdomains: list[str] = field(default_factory=list)
-    alive_hosts: list[str] = field(default_factory=list)   # 存活解析结果（精准扫描过滤后）
+    alive_hosts: list[str] = field(default_factory=list)   # 可解析主机（DNS 层存活；≠端口/HTTP 确认）
+    http_reachable: list[str] = field(default_factory=list)  # HTTP 层可达主机（有指纹卡或 scheme 证据）
     fp_queue: list[str] = field(default_factory=list)      # 指纹队列（存活优先，礼貌上限在采集器内）
     out_of_scope: list[str] = field(default_factory=list)
     whois: dict = field(default_factory=dict)
@@ -46,6 +50,7 @@ class ReconData:
     org_info: dict = field(default_factory=dict)              # 邮箱/ICP/ASN/企业
     code_leaks: list[dict] = field(default_factory=list)      # 代码泄漏（密钥已脱敏）
     dork_findings: list[dict] = field(default_factory=list)   # 搜索引擎 dorking
+    l3_results: list[dict] = field(default_factory=list)      # L3 深度侦察结构化结果（tool/host/data）
     doubts: list[str] = field(default_factory=list)     # 存疑清单
     degraded: list[str] = field(default_factory=list)   # 降级清单
     next_steps: list[dict] = field(default_factory=list)
@@ -60,17 +65,34 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
     lines += [f"> 生成时间: {time.strftime('%Y-%m-%d %H:%M:%S')} · 采集策略: {data.strategy_note}", ""]
     for wm in watermarks:  # HARD: 水印强制置顶
         lines += [f"> ⚠️ **{wm}**", ""]
+    lines += ["## 0. 授权与范围声明", ""]
+    lines += [
+        f"- 授权目标: `{data.target}`（级别 L{data.scan_level}）",
+        f"- 授权依据: {_table_cell(data.authorization_note) or '（未提供 --note，见审计日志 cascade_authorization）'}",
+        f"- 采集窗口: {_table_cell(data.scan_window) or time.strftime('%Y-%m-%d %H:%M:%S')}",
+        "- 范围边界: 仅上表范围内资产；C 段/关联域只记录不扫描（HARD）；"
+        "发现级输出需人工或授权验证流程定级",
+        "",
+    ]
     lines += ["## 1. 执行摘要", ""]
     if data.llm_analysis:
         lines += [data.llm_analysis, ""]
+    # CVE 口径：无关联时必须说明原因（缺版本指纹 ≠ 0 个漏洞）
+    cve_note = ""
+    if not data.cves:
+        has_unversioned = any(
+            (c.get("tech") or {}).get("server") and not (c.get("tech") or {}).get("server", {}).get("version")
+            for c in data.tech_cards if not c.get("error"))
+        cve_note = "（无法映射：中间件未暴露版本指纹）" if has_unversioned else ""
     lines += [
         f"- 目标 `{data.target}`，扫描级别 L{data.scan_level}",
         f"- 子域命中 {len(data.subdomains)} · IP {len(data.ips)} · 技术栈卡片 {len(data.tech_cards)} · "
-        f"CVE 关联 {len(data.cves)}",
+        f"CVE 关联 {len(data.cves)}{cve_note}",
         f"- 指标: {metrics.summary()}", "",
     ]
     lines += subdomain_section(data)
     lines += asset_table_section(data)
+    lines += _dns_records_section(data)
     lines += ["## 4. 技术栈明细（来源与置信度）", ""]
     if data.tech_cards:
         for card in data.tech_cards:
@@ -113,20 +135,41 @@ def render_markdown(data: ReconData, metrics: TaskMetrics, watermarks: list[str]
         if records:
             lines += ['### ' + title, '']
             lines += ['- ' + _table_cell(item.get('title', '')) + ': ' + _table_cell(item.get('content', '')) for item in records] + ['']
+    lines += _l3_results_section(data)
     lines += _intel_expansion_section(data)
     lines += ["## 5. 关联资产拓线图", "", "```mermaid", "graph TD"]
     lines.append(f'  T["{data.target}"]')
     tech_by_host: dict[str, str] = {}
+    favicon_by_host: dict[str, str] = {}
     for card in data.tech_cards:
         if card.get("error"):
             continue
         techs = "/".join(v["name"] for v in (card.get("tech") or {}).values()) or "未检出"
-        tech_by_host[str(card.get("host", ""))] = techs
-    for sub in data.subdomains[:15]:
-        if sub == data.target:
+        host = str(card.get("host", ""))
+        tech_by_host[host] = techs
+        if card.get("favicon_md5"):
+            favicon_by_host[host] = str(card["favicon_md5"])
+    # 已指纹主机优先展示（评审：拓线图曾把已指纹主机截断为「未指纹」）
+    ordered = ([h for h in tech_by_host if h != data.target]
+               + [s for s in data.subdomains if s != data.target and s not in tech_by_host])
+    seen: set[str] = set()
+    shown = 0
+    for sub in ordered:
+        if sub in seen or shown >= 25:
             continue
+        seen.add(sub)
+        shown += 1
         label = f"{sub}｜{tech_by_host.get(sub, '未指纹')}"
         lines.append(f'  T --> S["{label}"]')
+    # favicon 同值聚类边（跨主机同 md5 = 同源部署线索）
+    clusters: dict[str, list[str]] = {}
+    for host, md5 in favicon_by_host.items():
+        clusters.setdefault(md5, []).append(host)
+    for md5, hosts in clusters.items():
+        if len(hosts) > 1:
+            anchor = hosts[0]
+            for peer in hosts[1:]:
+                lines.append(f'  S["{anchor}｜{tech_by_host.get(anchor, "未指纹")}"] -. favicon 同源 .-> S["{peer}｜{tech_by_host.get(peer, "未指纹")}"]')
     for out in data.out_of_scope[:6]:
         lines.append(f'  T -. 范围外仅记录 .-> O["{out}"]')
     lines += ["```", "", "范围外候选（仅记录不扫描）:"]
@@ -166,6 +209,98 @@ def _table_cell(value) -> str:
     return str(value).replace('\n', ' ').replace('\r', ' ').replace('|', r'\|').replace('`', r'\`')
 
 
+def _dns_records_section(data: ReconData) -> list[str]:
+    """3b 节：DNS 记录面（A/AAAA/MX/NS/TXT/SOA + SPF/DMARC 解析）。
+
+    评审缺口：mx1-3 是 MX 服务器却无 SPF/DMARC/NS 记录呈现——邮件伪造面与
+    名称服务器拓扑对评估直接相关，缺失即渲染「未检出」，不做推测填补。
+    """
+    dns = data.dns or {}
+    if not dns:
+        return []
+    lines: list[str] = ["## 3b. DNS 记录面（公共解析器查询）", ""]
+    for rtype in ("A", "AAAA", "MX", "NS", "SOA"):
+        values = dns.get(rtype) or []
+        lines.append(f"- {rtype}: " + (", ".join(_table_cell(v) for v in values[:8]) or "未检出")
+                     + (f"（共 {len(values)} 条）" if len(values) > 8 else ""))
+    txt = dns.get("TXT") or []
+    lines.append(f"- TXT: " + ("; ".join(_table_cell(v) for v in txt[:6]) or "未检出"))
+    spf = [v for v in txt if str(v).lower().startswith("v=spf1")]
+    dmarc = dns.get("DMARC") or []
+    lines.append("- SPF: " + ("; ".join(_table_cell(v) for v in spf) or "未检出（无 v=spf1 TXT）——邮件伪造面需人工评估"))
+    lines.append(f"- DMARC: " + ("; ".join(_table_cell(v) for v in dmarc) or "未检出（_dmarc 无记录）"))
+    for err in dns.get("_errors") or []:
+        lines.append(f"- 查询失败: {_table_cell(err)}")
+    lines.append("")
+    return lines
+
+
+def _l3_results_section(data: ReconData) -> list[str]:
+    """4c 节：L3 深度侦察结构化结果——目录/参数/文档/脆弱面全量渲染。
+
+    评审 P0：此前 dir_enum_deep 只落一行计数、param_mining JSON 截断在
+    builder.add_note（400 字符）——本节以完整表格呈现全部发现。
+    """
+    if not data.l3_results:
+        return []
+    lines: list[str] = ["## 4c. L3 深度侦察结果（全量，发现级待人工定级）", ""]
+    by_tool: dict[str, list[dict]] = {}
+    for item in data.l3_results:
+        by_tool.setdefault(item.get("tool", ""), []).append(item)
+
+    dir_items = by_tool.get("dir_enum_deep", [])
+    if dir_items:
+        lines += ["### 深度目录枚举（软404 基线差分后命中）", "",
+                  "| 主机 | 路径 | 状态 | 级别 | 判定 |", "|---|---|---|---|---|"]
+        for item in dir_items:
+            found = (item.get("data") or {}).get("found") or []
+            if not found:
+                lines.append(f"| {item.get('host')} | （{ (item.get('data') or {}).get('checked', 0)} 路径零命中） | — | — | 正面项 |")
+                continue
+            for f in found:
+                lines.append("| {} | {} | {} | {} | {} |".format(
+                    _table_cell(item.get("host")), _table_cell(f.get("path", "")),
+                    _table_cell(f.get("status", "")), _table_cell(f.get("severity", "—")),
+                    _table_cell(f.get("note", ""))[:160]))
+        lines.append("")
+
+    param_items = by_tool.get("param_mining", [])
+    if param_items:
+        lines += ["### 参数挖掘（marker 反射 + 基线差分）", "",
+                  "| 主机 | 参数 | 状态 | 反射 | 差分 | 判定 |", "|---|---|---|---|---|---|"]
+        for item in param_items:
+            findings = (item.get("data") or {}).get("findings") or []
+            if not findings:
+                lines.append(f"| {item.get('host')} | （{(item.get('data') or {}).get('checked', 0)} 参数无激活） | — | — | — | 正面项 |")
+                continue
+            for f in findings:
+                lines.append("| {} | {} | {} | {} | {} | {} |".format(
+                    _table_cell(item.get("host")), _table_cell(f.get("param", "")),
+                    _table_cell(f.get("status", "")), "是" if f.get("reflected") else "否",
+                    _table_cell(f.get("verdict", "")), _table_cell(f.get("note", ""))[:120]))
+        lines.append("")
+
+    for tool_name, header in (("api_doc_probe", "API 文档/未授权面探测"),
+                              ("surface_check", "初步脆弱面（安全头/TLS/CORS）"),
+                              ("service_banner", "服务 Banner 识别"),
+                              ("reverse_dns", "反向 DNS（PTR）"),
+                              ("alive_os_probe", "存活探测 + OS 启发式"),
+                              ("topology_trace", "拓扑追踪"),
+                              ("origin_hunt", "CDN/源站线索"),
+                              ("vhost_scan", "虚拟主机差分"),
+                              ("cloud_enum", "云存储枚举"),
+                              ("dns_enum", "DNS 深度枚举")):
+        items = by_tool.get(tool_name, [])
+        if not items:
+            continue
+        lines += [f"### {header}", ""]
+        for item in items:
+            payload = json.dumps(item.get("data") or {}, ensure_ascii=False, default=str)
+            lines.append(f"- **{item.get('host') or item.get('target')}**: {_table_cell(payload)[:1500]}")
+        lines.append("")
+    return lines
+
+
 def _intel_expansion_section(data: ReconData) -> list[str]:
     """情报扩容章节（L0 第三方平台）：测绘引擎/组织人员/代码泄漏/dorking。
 
@@ -190,7 +325,9 @@ def _intel_expansion_section(data: ReconData) -> list[str]:
             lines.append(f"- 注册组织: {_table_cell(org['whois_org'])}（来源: WHOIS）")
         if org.get("emails"):
             lines.append("- 邮箱: " + ", ".join(
-                _table_cell(e.get("email", "")) for e in org["emails"][:10]))
+                _table_cell(e.get("email", ""))
+                + (f"（{e.get('source')}）" if "注册局" in str(e.get("source", "")) else "")
+                for e in org["emails"][:10]))
         else:
             lines.append("- 邮箱: 未检出（主站/WHOIS 均未暴露）")
         if org.get("role_account_candidates"):
@@ -219,7 +356,7 @@ def _intel_expansion_section(data: ReconData) -> list[str]:
 
     lines += ["### 搜索引擎 dorking（仅记录结果条目，未抓取目标页面）", ""]
     if data.dork_findings:
-        lines += ["| dork | 意图 | 级别 | 命中 | 示例结果 |", "|---|---|---|---|---|"]
+        lines += ["| dork | 意图 | 级别 | 命中 | 后端 | 响应状态 | 示例结果 |", "|---|---|---|---|---|---|---|"]
         for r in data.dork_findings[:15]:
             sample = ""
             if r.get("hits"):
@@ -227,7 +364,8 @@ def _intel_expansion_section(data: ReconData) -> list[str]:
                 sample = f"{first.get('title', '')} ({first.get('url', '')})"[:120]
             lines.append("| " + " | ".join(_table_cell(v) for v in (
                 r.get("dork", ""), r.get("intent", ""), r.get("severity", ""),
-                r.get("hit_count", 0), sample)) + " |")
+                r.get("hit_count", 0), r.get("backend", "—"), r.get("fetch_status", "—"),
+                sample)) + " |")
         lines.append("")
     else:
         lines += ["未启用或无产出", ""]

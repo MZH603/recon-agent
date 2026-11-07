@@ -58,10 +58,15 @@ class DeepFingerprintTool(BaseTool):
         findings: dict = {}
         evidence: list[str] = []
 
+        base_title, base_status = "", 0
         if params.include_baseline:
             base = await FingerprintTool(self._settings).run(FingerprintParams(target=params.target))
             if base.success:
                 findings.update(base.data.get("tech", {}))
+                # 评审 P0-5：title/status 从基线卡继承（此前深度卡 title 恒空，
+                # 报告总表全为「—」，指纹结论无法与页面样本互核）
+                base_title = str(base.data.get("title", "") or "")
+                base_status = int(base.data.get("status", 0) or 0)
                 evidence += [f"[基线] {e}" for e in base.evidence[:3]]
 
         scheme = await self._pick_scheme(netloc)
@@ -112,7 +117,7 @@ class DeepFingerprintTool(BaseTool):
             evidence.append(f"favicon md5: {favicon_md5}（跨主机同值 = 同源部署）")
 
         confidence = max([f["confidence"] for f in findings.values()], default=0.5)
-        card = {"host": netloc, "status": 200, "title": "", "scheme": scheme,
+        card = {"host": netloc, "status": base_status or 200, "title": base_title, "scheme": scheme,
                 "confidence": confidence, "tech": findings, "favicon_md5": favicon_md5,
                 "robots_hints": [], "sitemap_hints": [], "deep": True,
                 "techniques": [t.name for t in REGISTRY]}

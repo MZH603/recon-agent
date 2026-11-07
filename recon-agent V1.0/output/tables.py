@@ -8,15 +8,34 @@ if TYPE_CHECKING:  # 避免与 report.py 循环导入
 
 
 def subdomain_section(data: ReconData) -> list[str]:
-    """第 2 节：目标下的全部子域名（含存活状态与网络层资产）。"""
-    alive = set(data.alive_hosts) or {str(c.get("host", "")) for c in data.tech_cards}
+    """第 2 节：目标下的全部子域名（三态存活语义，评审 P0-2）。
+
+    三态定义（HARD：不得混用，可解析 ≠ 服务存活）：
+    - ✅ 端口确认 = L1 端口扫描有开放端口（最强证据）
+    - 🌐 HTTP 可达 = 指纹卡成功（HTTP 层有响应），端口面未必扫全
+    - · 可解析 = 仅 DNS 解析成功，HTTP/端口层未确认
+    - ❌ 未解析 = DNS 解析失败
+    """
+    alive = set(data.alive_hosts)
+    http_ok = set(data.http_reachable) | {
+        str(c.get("host", "")) for c in data.tech_cards if not c.get("error")}
+    port_ok = {h for h, ports in (data.port_map or {}).items() if ports}
     lines = [f"## 2. 子域名清单（共 {len(data.subdomains)} 个）", ""]
     lines += ["| # | 子域名 | 状态 |", "|---|---|---|"]
     for index, sub in enumerate(sorted(set(data.subdomains)), 1):
-        status = "✅ 存活" if sub in alive else "❌ 未解析/未存活"
+        if sub in port_ok:
+            status = "✅ 端口确认"
+        elif sub in http_ok:
+            status = "🌐 HTTP 可达"
+        elif sub in alive:
+            status = "· 可解析"
+        else:
+            status = "❌ 未解析"
         lines.append(f"| {index} | {sub} | {status} |")
     lines += ["", f"- 解析 IP: {', '.join(data.ips) or '未检出'}",
-              f"- C 段（仅记录）: {', '.join(data.c_sectors) or '未检出'}", ""]
+              f"- C 段（仅记录，见第 5 节）: {', '.join(data.c_sectors) or '未检出'}",
+              "- 状态口径: ✅=端口扫描有开放端口；🌐=HTTP 层有响应；·=仅 DNS 解析；"
+              "❌=解析失败。**可解析 ≠ 服务存活**。", ""]
     return lines
 
 
@@ -52,11 +71,11 @@ def asset_table_section(data: ReconData) -> list[str]:
         tech = card.get("tech") or {}
         ports = data.port_map.get(host)
         if ports is None:
-            port_cell = "未探测（需 L1 受控扫描）"      # 从未扫描：诚实留白
+            port_cell = "未探测"                       # 从未扫描：诚实留白
         elif ports:
             port_cell = ", ".join(str(p) for p in ports)  # 真实扫描结果
         else:
-            port_cell = "无开放端口（L1 扫描完成）"       # 扫描完成且无开放端口：明确结论
+            port_cell = "无开放端口"                    # 扫描完成且无开放端口：明确结论
         confidence = f"{float(card.get('confidence', 0.0)):.1f}" if card else "—"
         title = str(card.get("title", "") or "—")[:28]
         lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
@@ -69,6 +88,7 @@ def asset_table_section(data: ReconData) -> list[str]:
         rows += 1
     if rows == 0:
         lines.append("| （无存活资产数据） | — | — | — | — | — | — | — |")
-    lines += ["", "> 端口说明：由探测成功的 scheme 推断（443/HTTPS、80/HTTP）；"
-              "完整端口面需 L1 受控扫描（`--profile stealth`）后自动回填。", ""]
+    lines += ["", f"> 端口扫描范围: {data.port_scan_scope or '未记录'}。"
+              "「无开放端口」= 上述范围内无开放；不代表全端口面结论。"
+              "由探测成功的 scheme 推断的端口（443/HTTPS、80/HTTP）与扫描结果合并呈现。", ""]
     return lines

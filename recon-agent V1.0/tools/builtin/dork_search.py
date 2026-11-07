@@ -150,8 +150,10 @@ class DorkSearchTool(BaseTool):
             queries_run += 1
             hits: list[dict] = []
             used_backend = ""
+            last_status = 0
             for backend in backend_chain:
                 status, _, body = await self._fetch(backend, query)
+                last_status = status
                 if status == 200:
                     hits = _BACKEND_PARSERS[backend](body)
                     if hits:
@@ -163,16 +165,24 @@ class DorkSearchTool(BaseTool):
             results.append({
                 "dork": query, "intent": intent, "severity": severity,
                 "backend": used_backend or active_backend,
+                "fetch_status": last_status,  # 评审 P1-12：全 0 时供数据质量判定
                 "hits": hits[: params.max_hits_per_dork],
                 "hit_count": len(hits),
             })
 
+        # 评审 P1-12：全零结果必须携带数据质量注记，而非呈现为干净的 0
+        quality_note = ""
+        if results and all(r["hit_count"] == 0 for r in results):
+            statuses = sorted({str(r.get("fetch_status")) for r in results})
+            quality_note = (f"全部 {len(results)} 条 dork 0 命中（后端响应状态: {','.join(statuses)}）——"
+                            "若目标确被搜索引擎收录，本面数据可信度存疑（后端反爬/解析失败/区域不可达），"
+                            "建议换引擎人工复核，不应作为「无泄露」结论")
         high_count = sum(1 for r in results
                          if r["severity"] == "High" and r["hit_count"] > 0)
         data = {
             "target": domain, "queries_run": queries_run, "budget": budget,
             "backend_chain": backend_chain, "results": results,
-            "high_count": high_count, "notes": notes,
+            "high_count": high_count, "notes": notes, "quality_note": quality_note,
         }
         evidence = [
             f"搜索引擎 dorking: {domain}，{queries_run}/{budget} 请求（仅记录结果页条目）",
