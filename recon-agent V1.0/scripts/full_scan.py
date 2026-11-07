@@ -22,7 +22,6 @@ from gate.scan_gate import ScanGate
 from model.base import NormalizedToolCall
 from observability.metrics import TaskMetrics
 from output.report_builder import ReportBuilder
-from scripts.demo_l2 import PROBE_CODE
 from tools.registry import build_default
 from utils.config import Settings, get_settings
 from utils.logger import audit, err, info, ok, section, warn
@@ -32,6 +31,14 @@ SUB_PATHS = ["/admin", "/login", "/api", "/.env", "/.git/HEAD", "/robots.txt",
              "/actuator", "/swagger-ui.html", "/adminer.php", "/wp-login.php",
              "/console", "/docs"]
 SAVE_EVERY = 1   # HARD: 深度指纹每台落盘（非整轮结束才写）
+
+# L2 沙箱链路自检：纯计算脚本（沙箱 HARD 禁止一切网络/文件/子进程导入，
+# 安全响应头信息由 deep_fingerprint 卡片的「安全头」字段提供）。
+SANDBOX_SELFTEST = '''"""沙箱自检：纯计算验证三层沙箱执行链路（无网络/无文件/无受限导入）。"""
+import math
+import platform
+print("sandbox-ok", math.gcd(1071, 462), platform.python_version())
+'''
 
 
 def _safe_target(target: str) -> str:
@@ -260,12 +267,12 @@ async def stage_l2(target: str, alive: list[str], registry, builder: ReportBuild
         return
     probe = await registry.execute(NormalizedToolCall(
         id="fs-probe", name="script_probe",
-        arguments={"target": target, "code": PROBE_CODE.replace("__TARGET__", target)}))
+        arguments={"target": target, "code": SANDBOX_SELFTEST}))
     if probe.success:
-        builder.add_note(f"沙箱探针（安全响应头）: {probe.stdout[:300]}")
-        ok(f"沙箱探针完成: {probe.stdout.splitlines()[0] if probe.stdout else 'exit 0'}")
+        builder.add_note(f"沙箱自检: {probe.stdout[:300]}")
+        ok(f"沙箱自检完成: {probe.stdout.splitlines()[0] if probe.stdout else 'exit 0'}")
     else:
-        err(f"沙箱探针: {probe.error[:120]}")
+        err(f"沙箱自检: {probe.error[:120]}")
 
 
 async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuilder,
@@ -352,12 +359,14 @@ async def stage_l3(target: str, alive: list[str], registry, builder: ReportBuild
                    {"target": host}, f"trace:{host}")
 
     # 9) 深度目录枚举 + API 文档探测 + 参数挖掘 + 初步脆弱面（高价值主机 ≤5 台）
+    # 筛选键与 deep_fingerprint 实际产出对齐（server/frontend/system/middleware/framework）
     interesting = set()
     for card in builder.data.tech_cards:
         h = str(card.get("host", ""))
         tech = card.get("tech") or {}
         if h and not card.get("error") and (
-            tech.get("system") or tech.get("middleware") or tech.get("framework")):
+            tech.get("server") or tech.get("frontend") or tech.get("system")
+            or tech.get("middleware") or tech.get("framework")):
             interesting.add(h)
     for host in sorted(interesting)[:5]:
         if gate.current_level() < 3:

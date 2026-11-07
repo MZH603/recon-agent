@@ -11,7 +11,9 @@ from __future__ import annotations
 import asyncio
 from platforms.sync_worker import run_sync
 import hashlib
+import http.client
 import json
+import urllib.error
 import urllib.request
 
 from pydantic import BaseModel, Field
@@ -130,8 +132,16 @@ class DeepFingerprintTool(BaseTool):
     @staticmethod
     def _sync_get(url: str) -> str:
         req = urllib.request.Request(url, headers=request_headers())
-        with urlopen_same_origin(req, timeout=get_settings().CONNECT_TIMEOUT) as resp:
-            return resp.read(100_000).decode("utf-8", errors="replace")
+        try:
+            with urlopen_same_origin(req, timeout=get_settings().CONNECT_TIMEOUT) as resp:
+                return resp.read(100_000).decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            # 4xx/5xx 是有效答案（WhatWeb 式：错误页头部/内容同样携带指纹特征）；
+            # 与 webfetch.http_get 的语义对齐，避免 405/403 被误判为「无法连接」。
+            try:
+                return exc.read(100_000).decode("utf-8", errors="replace")
+            except (OSError, ValueError, http.client.HTTPException):
+                return ""
 
     async def _pick_scheme(self, netloc: str) -> str | None:
         """https → http 各探测一次（计入探测预算之外）。"""

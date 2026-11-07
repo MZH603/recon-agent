@@ -139,7 +139,16 @@ class Settings(BaseModel):
     TOOL_TIMEOUT_SECONDS: float = Field(default=120, gt=0,allow_inf_nan=False)
     SUBDOMAIN_ENUM_TIMEOUT_SECONDS: float = Field(default=1800, ge=120, le=3600)
     TOOL_CLEANUP_SECONDS: float = Field(default=5, gt=0,allow_inf_nan=False)
-    TOOL_TIMEOUT_OVERRIDES: dict[str, float] = Field(default_factory=dict)
+    # L3 长耗时工具的默认等待上限：与各自低扰动预算匹配（扰动延迟 2-5s/请求，
+    # dir_enum_deep ≤300 路径+递归+403 绕过 → 上界 ~30 分钟；120s 全局默认必然截断）。
+    TOOL_TIMEOUT_OVERRIDES: dict[str, float] = Field(default_factory=lambda: {
+        "dir_enum_deep": 1800.0,   # ≤300 路径 × 7s 上界 + 递归/绕过/退避
+        "param_mining": 900.0,     # ≤80 请求 × 7s 上界 + 基线 + 退避
+        "dns_enum": 1800.0,        # 字典 5000/并发 10 × 4s 解析超时上界
+        "alive_os_probe": 600.0,   # ≤50 主机 × (ping 10s + TCP 兜底 4s)
+        "topology_trace": 1200.0,  # ≤8 主机 × tracert 120s 命令超时
+        "cloud_enum": 900.0,       # 40 桶 × 6 平台 / 并发 3 × 20s 上界
+    })
     TOOL_RESULT_MAX_BYTES: int = Field(default=16000, ge=1024)
     SESSION_PROMPT_FILE: str = ""
     TUI_THEME: str = "dark"
